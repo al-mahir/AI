@@ -5,10 +5,19 @@ Protocol (all text messages are JSON):
   client -> server
     first message   {"type": "start", "sura": 1, "aya": 1, "word_idx": 0,
                      "strictness": "normal"?, "moshaf": {...}?, "include_units": false?,
-                     "engine": "zipformer"?}
-                    The start position SEEDS THE CURSOR — required in practice:
-                    a cold session cannot identify its own first chunk (the basmalah
-                    ambiguity), and the app always knows what the user picked.
+                     "engine": "zipformer"?, "rules": ["aared_madd", "ghonna"]?}
+                    "rules" is the LENIENCY selection: grade only these tajwid/sifa
+                    rules and stay silent about the rest. Keys come from
+                    `GET /tajweed-rules`. Omitted or null grades everything (the
+                    default, and what a client that never heard of this sends). An
+                    empty list is a real choice, not a missing one: hifz and tashkeel
+                    only. Hifz (`normal`) and tashkeel findings are NEVER filtered.
+                    The start position SEEDS THE CURSOR. It is OPTIONAL — omit it and
+                    the first chunk is matched by a whole-Quran `locate` instead of a
+                    windowed `track`, which answers `ok` for a distinctive passage
+                    (the cursor then self-seeds) and `ambiguous` with candidates for
+                    one that is not. Send it when you know it: the app always does,
+                    and it sidesteps the basmalah's 1:1 / 27:30 ambiguity outright.
                     "engine" picks from whatever main.py's lifespan built into
                     app.state.engines (currently: "real"/"mock"/"zipformer",
                     whichever Settings.resolved_asr_engine resolves to, plus
@@ -18,7 +27,7 @@ Protocol (all text messages are JSON):
                     the source of truth for what actually got used).
     binary          a frame of 16 kHz mono PCM16 little-endian audio.
     {"type":"seek", "sura","aya","word_idx"}   user jumped elsewhere; cursor resets.
-    {"type":"end"}  (or bare "end")           flush and close.
+    {"type":"end"}  (or bare "end")            flush and close.
 
   server -> client
     {"type":"session", "session_id", "engine"}         on start.
@@ -46,7 +55,7 @@ from quran_transcript import MoshafAttributes
 
 from ..config import get_settings
 from ..feedback.types import Span
-from ..session import LiveSession
+from ..session import LiveSession, resolve_moshaf
 
 router = APIRouter()
 
@@ -91,15 +100,20 @@ async def ws_session(websocket: WebSocket) -> None:
     requested_engine_name = cfg.get("engine")
     engine = engines.get(requested_engine_name) or engines[default_engine_name]
 
-    # A moshaf from the client may be an invalid combination (e.g. madd al-leen longer
-    # than madd al-aared). Don't let that tear down the whole session on its first
-    # message: fall back to the default recitation rather than dropping the connection.
-    moshaf = None
-    if cfg.get("moshaf"):
-        try:
-            moshaf = MoshafAttributes(**cfg["moshaf"])
-        except Exception:  # noqa: BLE001 — any bad-config shape, not just ValidationError
-            moshaf = None
+    # resolve_moshaf fills in whatever the client's config leaves out (e.g. `rewaya` --
+    # /moshaf-schema never sends it, since there's nothing to choose) from the default,
+    # and only falls back to the default outright for a genuinely invalid combination
+    # (e.g. madd al-leen longer than madd al-aared) -- never dropping the connection
+    # over a bad moshaf.
+    moshaf = resolve_moshaf(cfg.get("moshaf"), get_settings())
+
+    # `[]` and `null` mean different things and both are legal, so this cannot collapse
+    # to a truthiness test: an empty selection is "hifz and tashkeel only", while a
+    # missing one is "grade everything". Unknown keys are kept rather than rejected —
+    # they simply never match, so a stale client degrades to a narrower selection
+    # instead of a dropped connection.
+    raw_rules = cfg.get("rules")
+    rules = frozenset(str(r) for r in raw_rules) if raw_rules is not None else None
 
     session = LiveSession(
         engine,
@@ -108,6 +122,7 @@ async def ws_session(websocket: WebSocket) -> None:
         start=_span_of(cfg),
         strictness=cfg.get("strictness"),
         include_units=bool(cfg.get("include_units", False)),
+        rules=rules,
     )
 
     await websocket.send_text(

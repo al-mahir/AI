@@ -32,12 +32,38 @@ async def lifespan(app: FastAPI):
     yield
 
 
+_OPENAPI_TAGS = [
+    {
+        "name": "health",
+        "description": "Is the service up, and which ASR engine did it load.",
+    },
+    {
+        "name": "recitation",
+        "description": (
+            "The tajwid-style (moshaf) schema for the settings panel, the rules a "
+            "session can be graded on (leniency), and offline whole-file "
+            "transcription. **The live recitation path is `WS /ws/session` "
+            "— it cannot be listed here (OpenAPI has no WebSocket operation type); see "
+            "this page's top-level description for its full protocol and examples.**"
+        ),
+    },
+    {
+        "name": "search",
+        "description": (
+            "Find ayat by wording (`keyword`), meaning (`vector`), or both "
+            "(`hybrid`, default), optionally with LLM query expansion (`hyde`)."
+        ),
+    },
+]
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Tajwid recitation feedback service",
         description=__doc__,
         version="1.0.0",
         lifespan=lifespan,
+        openapi_tags=_OPENAPI_TAGS,
     )
     # The Java Spring backend / dev frontend call us from another origin (VPC-internal
     # in production). Tighten with an env-based allowlist when the topology is known.
@@ -50,7 +76,41 @@ def create_app() -> FastAPI:
     app.include_router(rest_router)
     app.include_router(ws_router)
 
-    @app.get("/")
+    @app.get(
+        "/",
+        tags=["health"],
+        summary="Service + docs pointer",
+        responses={
+            200: {
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "service": "Tajwid recitation feedback",
+                            "engine": "mock",
+                            "docs": "/docs",
+                            "endpoints": {
+                                "GET /health": "status + loaded engine",
+                                "GET /moshaf-schema": "the tajwid-style fields for the "
+                                "settings panel",
+                                "GET /tajweed-rules": "the rules a session can be graded "
+                                "on; send a subset as `rules` in the start message to be "
+                                "corrected on those only",
+                                "GET /search": "find āyāt by wording (keyword), meaning "
+                                "(vector), or both (hybrid)",
+                                "POST /transcribe-file": "offline: upload a recitation, "
+                                "get chunk transcripts",
+                                "WS /ws/session": "live: JSON start config, then 16 kHz "
+                                "mono PCM16-LE frames; per-waqf-chunk word feedback "
+                                "comes back — see /docs's top-level description for the "
+                                "full protocol (OpenAPI can't list WebSocket routes)",
+                            },
+                        }
+                    }
+                }
+            }
+        },
+    )
+
     def index() -> dict:
         s = get_settings()
         return {
@@ -59,9 +119,14 @@ def create_app() -> FastAPI:
             "docs": "/docs",
             "endpoints": {
                 "GET /health": "status + loaded engine",
+                "GET /moshaf-schema": "the tajwid-style fields for the settings panel",
+                "GET /tajweed-rules": "the rules a session can be graded on; send a "
+                "subset as `rules` in the start message to be corrected on those only",
+                "GET /search": "find āyāt by wording (keyword), meaning (vector), or both (hybrid)",
                 "POST /transcribe-file": "offline: upload a recitation, get chunk transcripts",
                 "WS /ws/session": "live: JSON start config, then 16 kHz mono PCM16-LE "
-                "frames; per-waqf-chunk word feedback comes back",
+                "frames; per-waqf-chunk word feedback comes back — see /docs's top-level "
+                "description for the full protocol (OpenAPI can't list WebSocket routes)",
             },
         }
 

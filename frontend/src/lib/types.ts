@@ -41,6 +41,28 @@ export type SuraInfo = {
   revelation: string;
 };
 
+/** Retrieval mode. The API also accepts "vector"; the UI doesn't offer it (see search.ts). */
+export type SearchMode = "keyword" | "hybrid";
+
+export type SearchResult = {
+  hits: AyahHit[];
+  // What the backend actually ran — "hybrid" degrades to "vector" on English, and
+  // hydeUsed is false if the LLM was unavailable. Shown to the reciter, not swallowed.
+  mode: string;
+  hydeUsed: boolean;
+};
+
+/** One āyah returned by GET /api/search. */
+export type AyahHit = {
+  sura: number;
+  aya: number;
+  text_uthmani: string;
+  translation: string | null;
+  // Cosine (semantic) or BM25 (keyword) — raw, uncalibrated, so we rank by it and
+  // deliberately do not show it as a percentage.
+  score: number;
+};
+
 // --- The backend's feedback ---------------------------------------------------
 
 export type Span = { sura: number; aya: number; word_idx: number };
@@ -146,6 +168,26 @@ export type MoshafField = {
 
 /** The chosen value per attribute key — sent to the backend in the start message. */
 export type MoshafConfig = Record<string, string | number>;
+
+// --- Leniency: which tajwid rules this reciter wants graded ---------------------
+
+/** One gradeable rule, from GET /api/tajweed-rules. */
+export type TajweedRuleDef = {
+  key: string;
+  name_ar: string;
+  name_en: string;
+  /** Which channel it arrives on. The UI groups by it; the backend does the filtering. */
+  kind: "tajweed" | "sifa";
+};
+
+/**
+ * The rules to be graded on, sent as `rules` in the start message.
+ *
+ * `null` and `[]` are DIFFERENT and both are meaningful: `null` grades everything (the
+ * default), `[]` grades no tajwid rule at all — hifz and tashkeel only. Anything that
+ * touches this value must not collapse the two with a truthiness test.
+ */
+export type RuleSelection = string[] | null;
 
 export type MistakeLog = {
   at: number;
