@@ -975,6 +975,80 @@ button {
   flex: 1;
 }
 
+/* Search mode strip. Reuses the .moshaf__opt pill so the two pickers in the app look
+   like the same control — no second style for the same idea. */
+.searchtabs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: none;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--pine-lift);
+}
+
+/* The HyDE switch. Sits at the far inline-end of the tab strip, next to the mode it
+   modifies — it is an option ON the meaning search, not a fourth mode. */
+.searchtabs__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-inline-start: auto;
+  font-size: 0.78rem;
+  color: var(--sand-dim);
+  cursor: pointer;
+}
+
+.searchtabs__toggle input {
+  accent-color: var(--gold);
+}
+
+.searchnote {
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  background: var(--pine);
+  color: var(--sand-dim);
+  font-size: 0.78rem;
+}
+
+/* An āyah result. The Uthmani text leads at reading size — it is the answer; the
+   reference and translation are the caption under it. */
+.ayahrow {
+  display: block;
+  width: 100%;
+  padding: 0.75rem 0.6rem;
+  border-radius: 8px;
+  text-align: start;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 140ms var(--ease);
+}
+
+.ayahrow:hover {
+  background: var(--pine);
+}
+
+.ayahrow__text {
+  font-size: 1.35rem;
+  line-height: 2.1;
+  color: var(--sand);
+}
+
+.ayahrow__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--sand-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.ayahrow__tr {
+  direction: ltr;
+  text-align: start;
+  opacity: 0.85;
+}
+
 .mistake {
   display: flex;
   align-items: baseline;
