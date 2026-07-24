@@ -5,6 +5,7 @@ from .confidence import STRICTNESS, score_errors
 from .diff import diff_recitation
 from .locate import locate
 from .reference import build_reference
+from .rules import filter_rules
 from .session import SessionState, advance
 from .sifat import compare_sifat
 from .track import track
@@ -41,6 +42,7 @@ def analyse(
     moshaf: MoshafAttributes,
     strictness: str = "normal",
     error_ratio: float = 0.1,
+    rules: frozenset[str] | None = None,
 ) -> FeedbackResponse:
     """Model phonetic output -> per-word feedback. Cold (no session cursor).
 
@@ -53,9 +55,12 @@ def analyse(
 
     If `output.phonemes.probs` is absent, every finding is UNSCORED and therefore
     reported as `almost`, never `error`. That is deliberate: unknown is not certain.
+
+    `rules` restricts which tajwid/sifa rules are graded (see feedback.rules); None
+    grades everything.
     """
     found = locate(output.phonemes.text, error_ratio=error_ratio)
-    return _analyse_located(found, output, moshaf, strictness)
+    return _analyse_located(found, output, moshaf, strictness, rules=rules)
 
 
 def analyse_session(
@@ -125,7 +130,7 @@ def analyse_session(
     trim_end = forced_cut
 
     response = _analyse_located(
-        found, stripped, state.moshaf, state.strictness, trim=forced_cut, trim_start=trim_start, trim_end=trim_end
+        found, stripped, state.moshaf, state.strictness, trim=forced_cut, rules=state.rules, trim_start=trim_start, trim_end=trim_end
     )
     response.non_verse = non_verse
     return response, advance(state, found)
@@ -137,6 +142,7 @@ def _analyse_located(
     moshaf: MoshafAttributes,
     strictness: str,
     trim: bool = False,
+    rules: frozenset[str] | None = None,
     trim_start: bool = True,
     trim_end: bool = True,
 ) -> FeedbackResponse:
@@ -191,6 +197,12 @@ def _analyse_located(
         errors.extend(
             _place_sifa_error(e, ref, ref_groups) for e in sifa_errors
         )
+
+    # Leniency: drop findings for rules this reciter is not working on. It happens HERE,
+    # upstream of `aggregate`, because word `status` is derived from the error list —
+    # filtering afterwards would leave a word painted red over a mistake we then refuse
+    # to show, which is the worst of both.
+    errors = filter_rules(errors, rules)
 
     words = aggregate(
         found.uthmani_text, found.span, errors, thresholds=STRICTNESS[strictness]

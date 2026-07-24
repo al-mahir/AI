@@ -11,12 +11,19 @@ from functools import lru_cache
 from typing import Literal
 
 import torch
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="TAJWID_", protected_namespaces=())
-
+    model_config = SettingsConfigDict(
+        env_prefix="TAJWID_",
+        protected_namespaces=(),
+        # A .env beside the process CWD is the ordinary way to hand this service an LLM
+        # key without putting it in a shell profile or a systemd unit.
+        env_file=".env",
+        extra="ignore",
+    )
     # --- Engine selection ------------------------------------------------
     # "real" loads the GPU models; "mock" fabricates model output from the
     # phonetizer (no torch models, runs anywhere); "auto" picks real iff CUDA
@@ -95,6 +102,33 @@ class Settings(BaseSettings):
     madd_mottasel_waqf: int = 4
     madd_aared_len: int = 4
     strictness: str = "normal"
+
+    # --- Āyah search (see search/service.py) ------------------------------
+    # Weight of the lexical (surface + root BM25) signal in `mode=hybrid`:
+    #   final = cosine + alpha * (bm25 / bm25.max())
+    # Swept upstream: Recall@10 peaks near 0.15 (0.429), but an exact-āyah-fragment query
+    # needs >= ~0.15 for its own āyah to rank #1; 0.20 keeps exact matches robust at 0.417
+    # (vs 0.393 vector-only). Small on purpose — the vector stays dominant.
+    search_hybrid_alpha: float = 0.20
+    # Default for HyDE query expansion when a request doesn't say. Off: it costs an LLM
+    # call (latency + a key), and search must work without one.
+    search_hyde: bool = False
+    # Default search mode when a request doesn't say. "hybrid" is the measured best on
+    # the Arabic path and degrades to pure vector on English (no Arabic lexical bag).
+    search_mode: Literal["keyword", "vector", "hybrid"] = "hybrid"
+
+    # --- LLM (HyDE query expansion only, today) ---------------------------
+    # Any OpenAI-compatible provider; migrating is this URL and nothing else.
+    llm_base_url: str = "https://api.groq.com/openai/v1"
+    # Optional ON PURPOSE. The service must start without it — recitation feedback,
+    # keyword search and plain vector search need no LLM at all. search/llm.py raises at
+    # call time instead, and HyDE falls back to the raw query.
+    llm_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("TAJWID_LLM_API_KEY", "GROQ_API_KEY", "LLM_API_KEY"),
+    )
+    # HyDE is a rewrite, not reasoning — use the small/cheap model.
+    llm_model_small: str = "openai/gpt-oss-20b"
 
     def dtype_for(self, device: str) -> torch.dtype:
         """Inference dtype for a device: configured dtype on CUDA, float32 on CPU."""

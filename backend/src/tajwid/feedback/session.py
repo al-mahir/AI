@@ -22,6 +22,9 @@ class SessionState:
     service's job, and this is a library.
 
     `penalty` is how far the tracking window has been widened after failures (FR-007).
+
+    `rules` is the leniency selection (feedback.rules): the tajwid/sifa rules this
+    reciter asked to be graded on. None — the default — grades everything.
     """
 
     moshaf: MoshafAttributes
@@ -29,6 +32,7 @@ class SessionState:
     cursor: Optional[Span] = None
     strictness: str = "normal"
     penalty: int = 0
+    rules: Optional[frozenset[str]] = None
 
 
 def advance(state: SessionState, result: LocateResult) -> SessionState:
