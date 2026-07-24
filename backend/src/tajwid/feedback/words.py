@@ -85,34 +85,44 @@ def aggregate(
     return feedback
 
 
-def trim_edges(words: list[WordFeedback], start: Span, end: Span) -> list[WordFeedback]:
+def trim_edges(
+    words: list[WordFeedback],
+    start: Span,
+    end: Span,
+    trim_start: bool = True,
+    trim_end: bool = True,
+) -> list[WordFeedback]:
     """Stop scoring words that OUR chunker cut in half (FR-010).
 
     When a chunk boundary falls mid-word, the ASR emits a mangled fragment, the diff
     faithfully reports a mismatch, and the learner is billed for a mistake that exists
-    only because of where we cut the audio. Every component behaved correctly and the
-    product still lied to its user. That is a false accusation with no learner error
-    behind it at all (Constitution VI), arriving through a door nobody was watching.
+    only because of where we cut the audio.
 
-    A boundary is only an ARTEFACT when the span begins mid-aya or ends mid-aya. A span
-    the reciter genuinely began (at word 0) or genuinely finished (at the last word) is
-    real, and silently declining to score it would be its own kind of lie.
+    A boundary is only an ARTEFACT when the span begins mid-aya or ends mid-aya, AND the
+    edge word actually suffered an error call. A boundary word that was recognized 100%
+    correctly with no errors was not mangled by the cut, so marking it trimmed would
+    wrongly hide a correct recitation under an 'unverified' warning.
+
+    Furthermore, if trim_start=False (e.g. the reciter intentionally started their session
+    or seeked to mid-aya), the starting word is the intended onset of speech, not an
+    audio slice artifact, so it is never trimmed.
 
     Trimmed words are still returned — the frontend draws them — but unscored.
     """
     if not words:
         return words
 
-    def _blank(word: WordFeedback) -> None:
-        word.errors = []
-        word.status = "correct"  # see WordFeedback.trimmed: read the flag first
-        word.trimmed = True
+    def _maybe_blank(word: WordFeedback) -> None:
+        if word.status != "correct" or word.errors:
+            word.errors = []
+            word.status = "correct"  # see WordFeedback.trimmed: read the flag first
+            word.trimmed = True
 
-    if start.word_idx > 0:
-        _blank(words[0])
+    if trim_start and start.word_idx > 0:
+        _maybe_blank(words[0])
 
     last_word_of_aya = len(Aya(end.sura, end.aya).get().uthmani_words) - 1
-    if end.word_idx < last_word_of_aya:
-        _blank(words[-1])
+    if trim_end and end.word_idx < last_word_of_aya:
+        _maybe_blank(words[-1])
 
     return words

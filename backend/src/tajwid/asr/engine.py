@@ -1,21 +1,30 @@
 """ASR engines: the one seam between audio and the feedback half.
 
-Three implementations of one small interface:
+Two engine *shapes*, one pipeline:
 
-* ``RealMuaalemEngine`` — the GPU path: silero VAD chunks upstream, then the Muaalem
-  multi-level CTC model, decoded reference-free (see transcribe.py). Byte-identical
-  to the pre-merge Al-Mahir pipeline.
-* ``ZipformerAsrEngine`` — streaming phoneme-CTC (Muno459/zipformer_p-quran via
-  sherpa-onnx), CPU-only. StreamSession's waqf/pause endpointing already hands every
-  engine one finalized utterance-sized wave at a time, so this engine decodes each
-  chunk independently (a fresh sherpa-onnx stream per call) rather than keeping
-  cross-chunk streaming state — the underlying model is architecturally streaming,
-  but nothing here needs it to be, given how it's invoked. No per-character
-  confidence or sifat detection: see ZipformerAsrEngine's docstring.
-* ``MockEngine`` — no model at all. It fabricates the transcript a *perfect* reciter
-  would have produced from the session cursor, using the real phonetizer. This lets
-  the whole backend + frontend loop run on a machine with no GPU, and lets frontend
-  work proceed without the model. The only fiction is the confidences.
+* ``ChunkEngine`` — one call per finalized utterance-sized wave. The engine has no
+  cross-chunk memory; ``StreamSession`` decides when an utterance ends and hands the
+  complete wave over.
+
+  - ``RealMuaalemEngine`` — GPU path: the Muaalem multi-level CTC model, trained on
+    ≤20 s waqf segments, decoded reference-free (see transcribe.py).
+  - ``MockEngine`` — no model at all. Fabricates what a perfect reciter would have
+    produced from the session cursor.
+
+* ``StreamingEngine`` — raw audio frames arrive continuously; the engine decodes
+  incrementally and exposes partial results. ``StreamSession``'s waqf boundary is a
+  *commit signal* ("finalize the hypothesis, start fresh") rather than the trigger
+  that starts decoding.
+
+  - ``ZipformerAsrEngine`` — streaming phoneme-CTC (Muno459/zipformer_p-quran via
+    sherpa-onnx), CPU-only. One persistent sherpa_onnx stream per engine instance,
+    fed every incoming frame, decoded incrementally. No per-character confidence or
+    sifat detection (see class docstring).
+
+``LiveSession`` (session.py) detects which shape the engine has and routes audio
+accordingly — raw frames to ``feed()`` on every call for StreamingEngine, finalized
+chunks to ``transcribe_chunk()`` for ChunkEngine. The feedback pipeline downstream
+is identical in both cases: it receives a ``ChunkTranscript``.
 
 Engines are built once at startup (see main.py's build_engines) and selected
 PER SESSION from the ``start`` message's ``engine`` field (api/ws.py) — falling back
@@ -24,18 +33,14 @@ to Settings.resolved_asr_engine's choice for an unknown/omitted name.
 
 from __future__ import annotations
 
-import logging
 import random
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional, Protocol
+from typing import Optional, Protocol, Union
 
 import numpy as np
 import torch
 
 from ..config import Settings, get_settings
-
-logger = logging.getLogger(__name__)
 from quran_transcript import Aya
 
 from ..feedback.mock import shorten_a_madd
@@ -58,10 +63,72 @@ class ChunkContext:
     moshaf: object | None = None  # MoshafAttributes; typed loosely to avoid an import cycle
 
 
-class AsrEngine(Protocol):
+# ---------------------------------------------------------------------------
+# Engine protocols
+# ---------------------------------------------------------------------------
+
+class ChunkEngine(Protocol):
+    """One call per finalized utterance-sized wave (Muaalem, Mock).
+
+    Stateless per call — safe to share across concurrent sessions.
+    """
     def transcribe_chunk(
         self, wave: torch.FloatTensor, sample_rate: int, ctx: ChunkContext | None = None
     ) -> ChunkTranscript: ...
+
+
+class StreamProcessor(Protocol):
+    """Per-session streaming decode state (one per concurrent user).
+
+    Created by a ``StreamingEngine``.  Owns the mutable decode state
+    (the sherpa_onnx stream) so concurrent sessions are isolated.
+
+    ``feed()`` is called on every incoming audio frame.  ``finalize()`` is called
+    when a waqf boundary is detected, producing the committed ``ChunkTranscript``.
+    ``reset()`` prepares for the next utterance within the same session.
+    """
+    def feed(self, samples: np.ndarray, sample_rate: int) -> str | None:
+        """Accept new audio, decode available frames.
+
+        Returns the current partial phoneme text if it changed since the last
+        call, or None if unchanged (no new decode output).
+        """
+        ...
+
+    def finalize(self, wave: torch.FloatTensor, sample_rate: int, ctx: ChunkContext | None = None) -> ChunkTranscript:
+        """Commit the current hypothesis: pad, flush, decode remaining frames.
+
+        Takes the exact wave of the waqf chunk (from the VAD endpointer) to guarantee
+        perfect waqf boundaries without corrupting the continuous stream state.
+        Returns a ``ChunkTranscript`` identical in shape to what ChunkEngine produces.
+        """
+        ...
+
+    def reset(self) -> None:
+        """Discard streaming state and start a fresh stream for the next utterance."""
+        ...
+
+
+class StreamingEngine(Protocol):
+    """Shared factory: owns the heavy model weights, produces per-session handles.
+
+    Like a connection pool or database session maker — the heavy resource (the
+    neural network / ONNX recognizer) is loaded once and shared; the mutable
+    per-user state (the decode stream) is isolated into lightweight handles.
+    """
+    def create_stream_processor(self) -> StreamProcessor:
+        """Create a new per-session streaming handle."""
+        ...
+
+
+# Union type for anywhere that stores "an engine" generically.
+AsrEngine = Union[ChunkEngine, StreamingEngine]
+
+
+def is_streaming(engine: AsrEngine) -> bool:
+    """Duck-type check: does this engine produce per-session streaming handles?"""
+    return hasattr(engine, "create_stream_processor")
+
 
 
 class RealMuaalemEngine:
@@ -207,29 +274,151 @@ def _inject_error(text: str, rng: random.Random) -> str:
     return "".join(groups)
 
 
-def make_engine(settings: Settings | None = None) -> AsrEngine:
+def make_engine(settings: Settings | None = None) -> ChunkEngine:
     s = settings or get_settings()
     if s.resolved_asr_engine == "real":
         return RealMuaalemEngine()
     return MockEngine(s)
 
 
-# --- Zipformer -------------------------------------------------------------
+# --- Zipformer (StreamingEngine) -------------------------------------------
 
 # Placeholder confidence for the optional debug `units` field only (ChunkResult.
 # UnitResult.prob is non-optional). The real scoring path never sees this —
-# transcribe_chunk returns char_probs=[], which feedback.confidence already
+# finalize() returns char_probs=[], which feedback.confidence already
 # treats as "unscored" (see its docstring: "everything stays UNSCORED (None),
 # which is not the same as confident") rather than a fabricated confidence
 # number. 0.5 here is deliberately neutral, not a claim about accuracy.
 _ZIPFORMER_UNSCORED_PROB = 0.5
 
 
+class ZipformerStreamProcessor:
+    """Per-session streaming state for the Zipformer engine.
+    
+    Holds the mutable sherpa_onnx stream, isolating concurrent sessions.
+    """
+    def __init__(self, recognizer):
+        self._recognizer = recognizer
+        self._stream = self._recognizer.create_stream()
+        self._last_partial: str = ""
+        self._committed_text: str = ""
+
+    def feed(self, samples: np.ndarray, sample_rate: int) -> str | None:
+        """Push streaming float32 samples into the continuous session stream."""
+        if sample_rate != 16000:
+            raise ValueError(f"Zipformer requires 16kHz audio, got {sample_rate}")
+        
+        audio_data = np.ascontiguousarray(samples, dtype=np.float32).reshape(-1)
+        if audio_data.size == 0:
+            return None
+
+        self._stream.accept_waveform(sample_rate, audio_data)
+        while self._recognizer.is_ready(self._stream):
+            self._recognizer.decode_stream(self._stream)
+
+        text = self._recognizer.get_result(self._stream)
+        
+        if text != self._last_partial:
+            self._last_partial = text
+            # Return uncommitted partial text for live visual updates
+            return text[len(self._committed_text):]
+        return None
+
+    def finalize(
+        self,
+        wave: torch.FloatTensor,
+        sample_rate: int,
+        ctx: ChunkContext | None = None,
+        forced: bool = False,
+    ) -> ChunkTranscript:
+        """Commit the exact waqf audio chunk and reset the partial stream.
+
+        Prepends 0.30s of leading silence around the VAD speech wave before decoding
+        on an isolated stream, so opening phonemes (Hamzat al-Wasl, e.g. ءَ / ٱ) start
+        from clean silence instead of being clipped.
+
+        Trailing silence is ONLY added when this is a real waqf (``forced=False``):
+        trailing phonemes (Madd, Waqf endings) need the lookahead to flush fully. A
+        forced (hard-cap) cut is mid-utterance, not a real pause -- padding it with
+        artificial trailing silence would tell the model the reciter stopped right
+        when they didn't, corrupting exactly the boundary this cut already damages.
+        This mirrors StreamSession._extract's own trail=0-on-forced rule; Zipformer
+        shares the same StreamSession, so it hits forced cuts too and must honor it.
+        """
+        from quran_transcript import chunck_phonemes
+
+        if sample_rate != 16000:
+            raise ValueError(f"Zipformer requires 16kHz audio, got {sample_rate}")
+
+        raw_pcm = wave.detach().cpu().numpy().reshape(-1).copy()
+        if raw_pcm.size == 0:
+            self.reset()
+            return ChunkTranscript(phonemes_text="", char_probs=[], groups=[], group_probs=[], sifat=[])
+
+        # Apply a 10ms fade-in to the VAD chunk before prepending digital silence.
+        # This prevents a sharp step-function (click) at the junction between the 0s
+        # and the ambient background noise. Zipformer often misinterprets this click
+        # as a transient consonant (ي or ه).
+        fade_len = int(0.01 * sample_rate)
+        if raw_pcm.size > fade_len:
+            fade = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+            raw_pcm[:fade_len] *= fade
+
+        # Pad wave with 0.30s lead silence (300ms CTC warm-up) and 0.50s trail silence (500ms flush).
+        # Digital silence padding for CTC warm-up is handled by ZipformerStreamProcessor.finalize().
+        lead_padding = np.zeros(int(0.3 * sample_rate), dtype=np.float32)
+        tail_padding = (
+            np.zeros(0, dtype=np.float32)
+            if forced
+            else np.zeros(int(0.66 * sample_rate), dtype=np.float32)
+        )
+        full_audio = np.concatenate([lead_padding, raw_pcm, tail_padding])
+
+        # Decode on an isolated stream
+        chunk_stream = self._recognizer.create_stream()
+        chunk_stream.accept_waveform(sample_rate, full_audio)
+        chunk_stream.input_finished()
+
+        while self._recognizer.is_ready(chunk_stream):
+            self._recognizer.decode_stream(chunk_stream)
+
+        text = self._recognizer.get_result(chunk_stream)
+
+        # Reset partial stream for the next verse
+        self.reset()
+
+        print(f"[Zipformer] finalized: {text or '(empty)'}")
+
+        if not text:
+            return ChunkTranscript(phonemes_text="", char_probs=[], groups=[], group_probs=[], sifat=[])
+
+        groups = chunck_phonemes(text)
+        return ChunkTranscript(
+            phonemes_text=text,
+            char_probs=[],
+            groups=groups,
+            group_probs=[_ZIPFORMER_UNSCORED_PROB] * len(groups),
+            sifat=[],
+        )
+
+    def reset(self) -> None:
+        """Discard all streaming state and start a fresh stream for the next utterance."""
+        self._stream = self._recognizer.create_stream()
+        self._last_partial = ""
+        self._committed_text = ""
+
+
 class ZipformerAsrEngine:
     """Streaming phoneme-CTC (Muno459/zipformer_p-quran, via sherpa-onnx), run
-    CPU-only, one finalized utterance-chunk at a time — see this module's
-    docstring for why no cross-chunk streaming state is needed here despite
-    the model itself being architecturally streaming.
+    CPU-only.
+
+    Implements ``StreamingEngine``: loaded once at startup and shared
+    across sessions. Yields ``ZipformerStreamProcessor``s (which own the actual
+    decode stream) to isolate concurrent users.
+
+    Also retains a ``transcribe_chunk()`` convenience wrapper (create_stream_processor +
+    feed + finalize) for backward compatibility with direct-drive tests that
+    don't go through the streaming LiveSession path.
 
     Two things this engine genuinely cannot provide, left honest rather than
     faked:
@@ -261,83 +450,45 @@ class ZipformerAsrEngine:
             decoding_method="greedy_search",
         )
 
+    # -- StreamingEngine interface ------------------------------------
+
+    def create_stream_processor(self) -> ZipformerStreamProcessor:
+        return ZipformerStreamProcessor(self._recognizer)
+
+    # -- Backward-compat convenience wrapper ---------------------------------
+
     def transcribe_chunk(
         self, wave: torch.FloatTensor, sample_rate: int, ctx: ChunkContext | None = None
     ) -> ChunkTranscript:
-        from quran_transcript import chunck_phonemes
+        """One-shot batch decode: feed + finalize + reset.
 
-        if sample_rate != 16000:
-            raise ValueError(f"ZipformerAsrEngine requires 16kHz audio, got {sample_rate}")
-
+        Kept for backward compatibility with direct-drive tests that bypass
+        the streaming LiveSession path. Equivalent to the old implementation.
+        """
         samples = wave.detach().to(torch.float32).cpu().numpy()
-        stream = self._recognizer.create_stream()
-        stream.accept_waveform(sample_rate, samples)
-        # Zipformer2-CTC is chunk-based with a lookahead window: the LAST real audio
-        # frames only clear that window once enough audio follows them. Without this,
-        # input_finished() lands before the tail has propagated through, and whatever
-        # was still sitting in the window — reliably the last character of the last
-        # word, since that is always what's most recent when the chunk ends — is
-        # silently dropped rather than decoded. This is not a guess: it's the same
-        # 0.66s zero-padding sherpa-onnx's own online-zipformer-ctc example feeds
-        # before input_finished() for this exact model type.
-        tail_paddings = np.zeros(int(0.66 * sample_rate), dtype=np.float32)
-        stream.accept_waveform(sample_rate, tail_paddings)
-        stream.input_finished()
-        while self._recognizer.is_ready(stream):
-            self._recognizer.decode_stream(stream)
-        text = self._recognizer.get_result(stream)
-
-        if not text:
-            return ChunkTranscript(phonemes_text="", char_probs=[], groups=[], group_probs=[], sifat=[])
-
-        # chunck_phonemes, not ai.phoneme_units.segment from the other repo —
-        # this is the grouping the rest of THIS system's sifat alignment
-        # anchors on, and it's regex/core-letter based rather than a greedy
-        # vocab-longest-match, so re-deriving it independently here (instead
-        # of importing a different segmenter) keeps this engine's output
-        # consistent with what RealMuaalemEngine/MockEngine already produce.
-        groups = chunck_phonemes(text)
-        sifat = [_FakeSifa(g, {}, _ZIPFORMER_UNSCORED_PROB) for g in groups]
-        return ChunkTranscript(
-            phonemes_text=text,
-            char_probs=[],
-            groups=groups,
-            group_probs=[_ZIPFORMER_UNSCORED_PROB] * len(groups),
-            sifat=sifat,
-        )
-
-
-def _zipformer_files_present(s: Settings) -> bool:
-    return Path(s.zipformer_model_path).is_file() and Path(s.zipformer_tokens_path).is_file()
+        stream = self.create_stream_processor()
+        stream.feed(samples, sample_rate)
+        transcript = stream.finalize(wave, sample_rate, ctx)
+        return transcript
 
 
 # Engines that are cheap enough to always build eagerly at startup alongside
 # whatever Settings.resolved_asr_engine picks (main.py's lifespan calls this
 # in a thread, same eager-build-to-avoid-a-GPU-race reasoning as before).
 # "zipformer" is CPU/ONNX and loads in well under a second, so it's always
-# INCLUDED WHEN AVAILABLE — a user can switch to it per-session even when the
-# server's default engine is "real"/"mock".
-#
-# Its model files are not in the repo (README), so a GPU-less dev box running
-# mock/real should still boot: skip zipformer with a warning rather than crash
-# the whole service over an engine nobody asked for. If zipformer WAS asked
-# for (TAJWID_ASR_ENGINE=zipformer), missing files are the user's actual bug —
-# let ZipformerAsrEngine's own assertion surface instead of masking it.
+# included — a user can switch to it per-session even when the server's
+# default engine is "real"/"mock".  If the model files aren't present, skip
+# it gracefully rather than crashing the whole startup.
 def build_engines(settings: Settings | None = None) -> dict[str, AsrEngine]:
     s = settings or get_settings()
-    default_name = s.resolved_asr_engine
     engines: dict[str, AsrEngine] = {}
-    if default_name == "zipformer" or _zipformer_files_present(s):
+    try:
         engines["zipformer"] = ZipformerAsrEngine(settings=s)
-    else:
-        logger.warning(
-            "Skipping the zipformer engine: no model at %s / tokens at %s. "
-            "It will not appear in /health's available_engines or be selectable "
-            "per-session until TAJWID_ZIPFORMER_MODEL_PATH/TAJWID_ZIPFORMER_TOKENS_PATH "
-            "point at real files.",
-            s.zipformer_model_path,
-            s.zipformer_tokens_path,
-        )
+    except (AssertionError, FileNotFoundError, OSError) as exc:
+        import logging
+        logging.getLogger(__name__).warning("Zipformer engine unavailable (model files missing?): %s", exc)
+    default_name = s.resolved_asr_engine
     if default_name not in engines:
         engines[default_name] = make_engine(s)
     return engines
+

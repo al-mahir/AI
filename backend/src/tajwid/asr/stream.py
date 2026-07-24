@@ -94,7 +94,17 @@ class StreamSession:
                 prob = float(self.vad(window, self.s.sample_rate))
             self._fed_windows += 1
             w_end_abs = w_start_abs + self.window
-            is_speech = prob > self.s.vad_threshold
+            # Dual-Threshold Hysteresis + RMS Energy Guard:
+            # - To START speech: require prob > vad_threshold.
+            # - To MAINTAIN speech: stay in speech if prob > (vad_threshold - hysteresis) OR
+            #   if RMS > rms_speech_threshold (active vocal energy). Sustained held vowels
+            #   (6-Harakat Madd like الضالين) have high RMS even if neural VAD probability dips.
+            rms = float(torch.sqrt(torch.mean(window ** 2)))
+            # print(f"Prob: {prob:.4f} | RMS: {rms:.4f}")
+            if self._in_speech:
+                is_speech = (prob > (self.s.vad_threshold - self.s.vad_hysteresis_offset)) or (rms > self.s.rms_speech_threshold)
+            else:
+                is_speech = prob > self.s.vad_threshold
 
             if is_speech:
                 if not self._in_speech:

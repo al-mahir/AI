@@ -172,15 +172,9 @@ function Word({
     .join(" ");
 
   // The rich detail panel is worth showing only when we have something to say about the
-  // word: a verdict, a boundary note, or at least a fault we can stand behind. Zipformer
-  // has no sifat and no backed tajweed, so its only showable faults are phoneme-level
-  // (normal/tashkeel) — mirror that here so we never open an empty panel for it.
+  // word: a verdict, a boundary note, or at least the word itself once it has been read.
   const [open, setOpen] = useState(false);
-  const showable =
-    engine === "zipformer"
-      ? detail?.errors.filter((e) => e.error_type === "normal" || e.error_type === "tashkeel")
-      : detail?.errors;
-  const hasDetail = !veiled && !!detail && (detail.trimmed || (showable?.length ?? 0) > 0);
+  const hasDetail = !veiled && !!detail && (detail.trimmed || detail.errors.length > 0);
 
   return (
     <button
@@ -192,13 +186,12 @@ function Word({
       onMouseLeave={hasDetail ? () => setOpen(false) : undefined}
       onFocus={hasDetail ? () => setOpen(true) : undefined}
       onBlur={hasDetail ? () => setOpen(false) : undefined}
-      // A short plain-text summary stays as the native tooltip: the touch fallback and
-      // the accessible name of the mistake. Engine-aware, like the rich panel below.
-      title={veiled ? undefined : tooltip(word, detail, engine)}
-      aria-label={veiled ? "كلمة مخفية" : word.uthmani || "نهاية الآية"}
+      // A short plain-text summary stays as the native tooltip: it is the fallback for
+      // touch, and the accessible name of the mistake for a screen reader.
+      title={veiled ? undefined : tooltip(word, detail, engine)}      aria-label={veiled ? "كلمة مخفية" : word.uthmani || "نهاية الآية"}
     >
       {word.glyph}
-      {open && detail && <WordDetail word={word} detail={detail} engine={engine} />}
+      {open && detail && <WordDetail word={word} detail={detail} />}
     </button>
   );
 }
@@ -238,16 +231,6 @@ function tooltip(
     return rules || errorLabel(e.error_type);
   });
   return `${word.uthmani} — ${hedge}${parts.join(" · ")}`;
-}
-
-/** Recited vs. expected, in the phonetic script (which reuses Uthmani letters —
- *  see quran_transcript's alphabet — so it reads as Arabic, not IPA). Used by the
- *  Zipformer tooltip, which has only phonetics to show. */
-function plainDiff(e: FeedbackError): string {
-  const label = e.error_type === "tashkeel" ? "التشكيل" : "النطق";
-  if (!e.predicted_ph) return `${label}: سقطت «${e.expected_ph}»`;
-  if (!e.expected_ph) return `${label}: زيادة «${e.predicted_ph}»`;
-  return `${label}: قرأت «${e.predicted_ph}» بدل «${e.expected_ph}»`;
 }
 
 const errorLabel = (t: string) =>
@@ -346,25 +329,9 @@ function confidenceLabel(c: number | null): { text: string; pct: number | null }
  * how it was misread, expected vs read, and the model's confidence. Anchored to the
  * word; the muṣḥaf is RTL so it reads right-to-left like the text under it.
  */
-function WordDetail({
-  word,
-  detail,
-  engine,
-}: {
-  word: MushafWord;
-  detail: WordFeedback;
-  engine?: string;
-}) {
+function WordDetail({ word, detail }: { word: MushafWord; detail: WordFeedback }) {
   const statusCls =
     detail.status === "error" ? "worddetail--error" : detail.status === "almost" ? "worddetail--almost" : "";
-
-  // Zipformer has no sifat and its tajweed/madd classification is unbacked, so keep the
-  // panel to the phoneme-level faults it can actually stand behind — the same restraint
-  // as its plain tooltip. Muaalem shows everything.
-  const errors =
-    engine === "zipformer"
-      ? detail.errors.filter((e) => e.error_type === "normal" || e.error_type === "tashkeel")
-      : detail.errors;
 
   return (
     <div className={`worddetail ${statusCls}`} role="tooltip" dir="rtl">
@@ -387,7 +354,7 @@ function WordDetail({
         <p className="worddetail__note">لم تُقيَّم هذه الكلمة — وقعت على حدّ المقطع الصوتيّ.</p>
       ) : (
         <ul className="worddetail__list">
-          {errors.map((e, i) => {
+          {detail.errors.map((e, i) => {
             const d = describeError(e);
             const conf = confidenceLabel(d.confidence);
             return (
@@ -404,17 +371,19 @@ function WordDetail({
                     <span className="worddetail__v">{r.v}</span>
                   </div>
                 ))}
-                <div className="worddetail__conf">
-                  <span className="worddetail__k">الثقة</span>
-                  {conf.pct == null ? (
-                    <span className="worddetail__v">{conf.text}</span>
-                  ) : (
-                    <span className="worddetail__bar" aria-label={conf.text}>
-                      <span style={{ width: `${conf.pct}%` }} />
-                      <em>{conf.text}</em>
-                    </span>
-                  )}
-                </div>
+                {e.confidence !== 0.999 && (
+                  <div className="worddetail__conf">
+                    <span className="worddetail__k">الثقة</span>
+                    {conf.pct == null ? (
+                      <span className="worddetail__v">{conf.text}</span>
+                    ) : (
+                      <span className="worddetail__bar" aria-label={conf.text}>
+                        <span style={{ width: `${conf.pct}%` }} />
+                        <em>{conf.text}</em>
+                      </span>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -422,4 +391,12 @@ function WordDetail({
       )}
     </div>
   );
+}
+/** Recited vs. expected, in the phonetic script (which reuses Uthmani letters —
+ *  see quran_transcript's alphabet — so it reads as Arabic, not IPA). */
+function plainDiff(e: import("../lib/types").FeedbackError): string {
+  const label = e.error_type === "tashkeel" ? "التشكيل" : "النطق";
+  if (!e.predicted_ph) return `${label}: سقطت «${e.expected_ph}»`;
+  if (!e.expected_ph) return `${label}: زيادة «${e.predicted_ph}»`;
+  return `${label}: قرأت «${e.predicted_ph}» بدل «${e.expected_ph}»`;
 }

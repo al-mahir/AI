@@ -11,19 +11,11 @@ from functools import lru_cache
 from typing import Literal
 
 import torch
-from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="TAJWID_",
-        protected_namespaces=(),
-        # A .env beside the process CWD is the ordinary way to hand this service an LLM
-        # key without putting it in a shell profile or a systemd unit.
-        env_file=".env",
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(env_prefix="TAJWID_", protected_namespaces=())
 
     # --- Engine selection ------------------------------------------------
     # "real" loads the GPU models; "mock" fabricates model output from the
@@ -68,9 +60,16 @@ class Settings(BaseSettings):
     # --- Streaming endpointing (silero VAD gate) -------------------------
     # silero v4 operates on fixed 1536-sample windows (~96 ms at 16 kHz).
     vad_window_samples: int = 1536
-    # Speech-probability threshold. 0.6 (not 0.3) so the shallow, short dips at a waqf
-    # in continuous recitation register as silence.
+    # Speech probability threshold for speech ONSET. During active speech,
+    # stream.py uses a lower threshold (vad_threshold - vad_hysteresis_offset) plus
+    # an RMS energy guard to protect sustained held vowels (6-Harakat Madd like الضالين).
     vad_threshold: float = 0.6
+    # How much to lower vad_threshold when MAINTAINING speech (dual-threshold hysteresis).
+    # Prevents VAD from cutting mid-word during brief probability dips in held vowels.
+    vad_hysteresis_offset: float = 0.05
+    # RMS energy floor: if the audio frame's RMS exceeds this, speech is maintained even
+    # when the neural VAD probability dips. Protects sustained vocalisation (Madd).
+    rms_speech_threshold: float = 0.02
     # A silence run at least this long *after* speech finalizes a chunk (a waqf).
     min_silence_endpoint_ms: int = 300
     # Discard finalized speech shorter than this as noise (breaths/clicks).
@@ -78,8 +77,10 @@ class Settings(BaseSettings):
     # Hard cap per chunk: the Muaalem model was trained on <=20 s waqf segments.
     max_chunk_s: float = 19.0
     # Padding added around a finalized speech region before inference (see stream.py).
-    chunk_lead_pad_ms: int = 120
-    chunk_trail_pad_ms: int = 240
+    # Keep lead pad minimal (20ms) so we don't capture pre-speech breath/inhalation noise.
+    chunk_lead_pad_ms: int = 20
+    # 500ms trail pad gives CTC encoders enough trailing silence to flush final consonants (م, ن).
+    chunk_trail_pad_ms: int = 200
 
     # --- W2V-BERT segmenter (chunker for the offline whole-file batch path) ---
     segmenter_batch_size: int = 8
@@ -94,33 +95,6 @@ class Settings(BaseSettings):
     madd_mottasel_waqf: int = 4
     madd_aared_len: int = 4
     strictness: str = "normal"
-
-    # --- Āyah search (see search/service.py) ------------------------------
-    # Weight of the lexical (surface + root BM25) signal in `mode=hybrid`:
-    #   final = cosine + alpha * (bm25 / bm25.max())
-    # Swept upstream: Recall@10 peaks near 0.15 (0.429), but an exact-āyah-fragment query
-    # needs >= ~0.15 for its own āyah to rank #1; 0.20 keeps exact matches robust at 0.417
-    # (vs 0.393 vector-only). Small on purpose — the vector stays dominant.
-    search_hybrid_alpha: float = 0.20
-    # Default for HyDE query expansion when a request doesn't say. Off: it costs an LLM
-    # call (latency + a key), and search must work without one.
-    search_hyde: bool = False
-    # Default search mode when a request doesn't say. "hybrid" is the measured best on
-    # the Arabic path and degrades to pure vector on English (no Arabic lexical bag).
-    search_mode: Literal["keyword", "vector", "hybrid"] = "hybrid"
-
-    # --- LLM (HyDE query expansion only, today) ---------------------------
-    # Any OpenAI-compatible provider; migrating is this URL and nothing else.
-    llm_base_url: str = "https://api.groq.com/openai/v1"
-    # Optional ON PURPOSE. The service must start without it — recitation feedback,
-    # keyword search and plain vector search need no LLM at all. search/llm.py raises at
-    # call time instead, and HyDE falls back to the raw query.
-    llm_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("TAJWID_LLM_API_KEY", "GROQ_API_KEY", "LLM_API_KEY"),
-    )
-    # HyDE is a rewrite, not reasoning — use the small/cheap model.
-    llm_model_small: str = "openai/gpt-oss-20b"
 
     def dtype_for(self, device: str) -> torch.dtype:
         """Inference dtype for a device: configured dtype on CUDA, float32 on CPU."""

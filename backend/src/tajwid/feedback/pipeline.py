@@ -5,7 +5,6 @@ from .confidence import STRICTNESS, score_errors
 from .diff import diff_recitation
 from .locate import locate
 from .reference import build_reference
-from .rules import filter_rules
 from .session import SessionState, advance
 from .sifat import compare_sifat
 from .track import track
@@ -42,7 +41,6 @@ def analyse(
     moshaf: MoshafAttributes,
     strictness: str = "normal",
     error_ratio: float = 0.1,
-    rules: frozenset[str] | None = None,
 ) -> FeedbackResponse:
     """Model phonetic output -> per-word feedback. Cold (no session cursor).
 
@@ -55,18 +53,16 @@ def analyse(
 
     If `output.phonemes.probs` is absent, every finding is UNSCORED and therefore
     reported as `almost`, never `error`. That is deliberate: unknown is not certain.
-
-    `rules` restricts which tajwid/sifa rules are graded (see feedback.rules); None
-    grades everything.
     """
     found = locate(output.phonemes.text, error_ratio=error_ratio)
-    return _analyse_located(found, output, moshaf, strictness, rules=rules)
+    return _analyse_located(found, output, moshaf, strictness)
 
 
 def analyse_session(
     output: MuaalemOutput,
     state: SessionState,
     error_ratio: float = 0.1,
+    forced_cut: bool = True,
 ) -> tuple[FeedbackResponse, SessionState]:
     """Session-aware analysis: track around the cursor, fall back to a cold search.
 
@@ -82,8 +78,9 @@ def analyse_session(
     """
     # (FR-009) Strip istiaatha / basmalah / sadaka BEFORE anything else. They are
     # correct, non-Quranic, and would otherwise be diffed against the verse.
+    sura = state.cursor.sura if state.cursor else None
     verse_phonemes, non_verse, start, end = strip_non_verse(
-        output.phonemes.text, state.moshaf
+        output.phonemes.text, state.moshaf, sura=sura
     )
 
     if not verse_phonemes:
@@ -124,8 +121,11 @@ def analyse_session(
             # force a wrong answer out of the window.
             found = locate(verse_phonemes, error_ratio=error_ratio)
 
+    trim_start = forced_cut and (state.cursor is None or found.span != state.cursor)
+    trim_end = forced_cut
+
     response = _analyse_located(
-        found, stripped, state.moshaf, state.strictness, trim=True, rules=state.rules
+        found, stripped, state.moshaf, state.strictness, trim=forced_cut, trim_start=trim_start, trim_end=trim_end
     )
     response.non_verse = non_verse
     return response, advance(state, found)
@@ -137,7 +137,8 @@ def _analyse_located(
     moshaf: MoshafAttributes,
     strictness: str,
     trim: bool = False,
-    rules: frozenset[str] | None = None,
+    trim_start: bool = True,
+    trim_end: bool = True,
 ) -> FeedbackResponse:
     """Everything downstream of "we know which words these are".
 
@@ -156,6 +157,29 @@ def _analyse_located(
     ref = build_reference(found.uthmani_text, moshaf)
     errors = diff_recitation(found.uthmani_text, predicted, moshaf)
 
+    # Zipformer mode: no per-character probabilities or Sifat data.
+    # Filter out all Tajweed-specific rule findings (Madd length, Qalqala, etc.)
+    # and keep only core phonetic mismatches (wrong letter / tashkeel),
+    # stripping any tajweed rule tags so they report as plain phonetic errors.
+    if output.phonemes.probs is None:
+        filtered_errors = []
+        for e in errors:
+            if e.error_type == "tajweed":
+                continue
+            if (
+                e.expected_len is not None 
+                and e.predicted_len is not None 
+                and e.expected_len != e.predicted_len 
+                and set(e.expected_ph) == set(e.predicted_ph)
+            ):
+                continue
+            
+            # Strip tajweed rule metadata (e.g. Qalqala/Madd tags) and mark as confident
+            e_clean = e.model_copy(update={"tajweed_rules": [], "confidence": 0.999})
+            filtered_errors.append(e_clean)
+        
+        errors = filtered_errors
+
     # Phoneme-level findings are scored from phonemes.probs. Sifa findings already
     # carry their own confidence (each attribute's own probability), so they are
     # scored at birth in compare_sifat and must not be re-scored here.
@@ -168,18 +192,17 @@ def _analyse_located(
             _place_sifa_error(e, ref, ref_groups) for e in sifa_errors
         )
 
-    # Leniency: drop findings for rules this reciter is not working on. It happens HERE,
-    # upstream of `aggregate`, because word `status` is derived from the error list —
-    # filtering afterwards would leave a word painted red over a mistake we then refuse
-    # to show, which is the worst of both.
-    errors = filter_rules(errors, rules)
-
     words = aggregate(
         found.uthmani_text, found.span, errors, thresholds=STRICTNESS[strictness]
     )
 
+    # Trim whenever this chunk was actually cut by us (`trim` == forced_cut from the
+    # caller), regardless of whether this engine has per-character probs. Zipformer
+    # shares the same StreamSession as Muaalem, so it hits the same hard-cap forced
+    # cuts and has just as much boundary artifact to forgive -- "no probs" is not
+    # the same fact as "this was a clean natural pause".
     if trim and found.end is not None:
-        words = trim_edges(words, found.span, found.end)
+        words = trim_edges(words, found.span, found.end, trim_start=trim_start, trim_end=trim_end)
 
     return FeedbackResponse(
         status="ok",

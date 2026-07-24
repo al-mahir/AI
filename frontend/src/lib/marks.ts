@@ -14,7 +14,7 @@
  */
 
 import { wordKey } from "./mushaf";
-import type { FeedbackEvent, MistakeLog, WordFeedback, WordMark } from "./types";
+import type { FeedbackEvent, MistakeLog, PartialEvent, WordFeedback, WordMark } from "./types";
 
 export type MarkState = {
   /** wordKey -> how it is painted. */
@@ -43,6 +43,15 @@ function markOf(w: WordFeedback): WordMark {
 
 /** Fold one chunk's feedback into the page state. Pure: returns a new state. */
 export function applyFeedback(prev: MarkState, event: FeedbackEvent): MarkState {
+  return applyPartialFeedback(prev, event, true);
+}
+
+/** Fold partial feedback into state, optionally updating the log. */
+export function applyPartialFeedback(
+  prev: MarkState,
+  event: FeedbackEvent | PartialEvent,
+  updateLog: boolean
+): MarkState {
   const fb = event.feedback;
   // `ambiguous` and `no_match` carry no words and assert nothing. Painting the
   // candidates would be scoring the learner against a verse we did not identify.
@@ -51,24 +60,29 @@ export function applyFeedback(prev: MarkState, event: FeedbackEvent): MarkState 
   const marks = new Map(prev.marks);
   const detail = new Map(prev.detail);
   const reached = new Set(prev.reached);
-  const log = [...prev.log];
+  const log = updateLog ? [...prev.log] : prev.log;
 
   for (const w of fb.words) {
     const key = wordKey(w.sura, w.aya, w.word_idx);
-    const mark = markOf(w);
+    let mark = markOf(w);
+
+    // Mask mistakes during live streaming; wait for waqf boundary to show the true verdict
+    if (event.type === "partial" && (mark === "error" || mark === "almost")) {
+      mark = "recited";
+    }
     reached.add(key);
 
     // A word cut by OUR chunk boundary comes back `unverified`. But `overlap_words`
     // means the neighbouring chunk reaches back over that same word and scores it for
     // real. Whichever order the two chunks arrive, the real verdict must win: never let
     // an `unverified` re-emission grey out a word an overlapping chunk already judged.
-    const prev = marks.get(key);
-    if (mark === "unverified" && prev && prev !== "unverified") continue;
+    const existing = marks.get(key);
+    if (mark === "unverified" && existing && existing !== "unverified") continue;
 
     marks.set(key, mark);
     detail.set(key, w);
 
-    if (mark === "error" || mark === "almost") {
+    if (event.type === "feedback" && (mark === "error" || mark === "almost")) {
       log.push({
         at: event.audio_span_sec[0],
         sura: w.sura,

@@ -6,9 +6,10 @@
  * looks exactly like the model mishearing. The worklet runs on the audio thread and
  * cannot be starved by rendering.
  *
- * Resampling to 16 kHz is done by asking the AudioContext for a 16 kHz rate directly
- * where the browser allows it, and otherwise by decimating with a simple average. The
- * whole model stack is fixed at 16 kHz.
+ * The AudioContext runs at the hardware's native sample rate (usually 48 kHz) to avoid
+ * forcing macOS / headsets into a low-quality "Hands-Free" profile. Resampling to 16 kHz
+ * is done in JavaScript via box-average decimation before sending frames to the backend.
+ * The whole model stack is fixed at 16 kHz.
  */
 
 const FRAME_MS = 100;
@@ -58,15 +59,17 @@ export class Mic {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
       },
     });
 
-    // Ask for 16 kHz up front so the browser resamples in native code. Firefox and
-    // some Safari builds ignore the hint, so never assume it was honoured.
-    this.ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    // We no longer ask for 16 kHz up front. Asking for 16kHz causes macOS and many 
+    // headsets to switch into a low-quality "Voice / Hands-Free" hardware profile.
+    // Instead, we capture at the native high-fidelity rate (usually 48kHz) and
+    // downsample it ourselves.
+    this.ctx = new AudioContext();
     const blob = new Blob([WORKLET], { type: "application/javascript" });
     const url = URL.createObjectURL(blob);
     try {

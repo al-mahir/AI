@@ -122,3 +122,19 @@ def test_istiaatha_before_a_verse_does_not_poison_the_verses_feedback(moshaf):
     # The verse itself was recited perfectly. Not one word may be marked wrong.
     assert all(w.status == "correct" for w in response.words)
     assert all(w.errors == [] for w in response.words)
+
+
+def test_basmalah_alone_for_other_suras_does_not_move_cursor(moshaf):
+    """When a user is at Surah != 1 (e.g. Surah 5:1), reciting Basmalah alone must be
+    stripped as non-verse opening text and MUST NOT hijack the cursor to Al-Fatiha 1:1.
+    """
+    cursor = Span(sura=5, aya=1, word_idx=0)
+    state = SessionState(moshaf=moshaf, session_id="s", cursor=cursor)
+
+    response, after = analyse_session(
+        MuaalemOutput.from_phonemes(_basmalah(moshaf)), state
+    )
+
+    assert response.non_verse == ["basmalah"]
+    assert response.words == []
+    assert after.cursor == cursor  # cursor stays at Surah 5:1, not hijacked to 1:1

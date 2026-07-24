@@ -19,14 +19,6 @@ export const SearchIcon = ({ size }: P) => (
   </svg>
 );
 
-export const SlidersIcon = ({ size }: P) => (
-  <svg {...box(size)}>
-    <path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h8M16 18h4" />
-    <circle cx="16" cy="6" r="2" />
-    <circle cx="8" cy="12" r="2" />
-    <circle cx="14" cy="18" r="2" />
-  </svg>
-);
 
 export const MicIcon = ({ size }: P) => (
   <svg {...box(size)}>
@@ -94,10 +86,11 @@ export const CloseIcon = ({ size }: P) => (
 );
 
 /** Model picker — two sliders, standing in for "which engine is listening". */
-export const ChipIcon = ({ size }: P) => (
+export const SlidersIcon = ({ size }: P) => (
   <svg {...box(size)}>
-    <rect x="7" y="7" width="10" height="10" rx="2" />
-    <path d="M10 4v3M14 4v3M10 17v3M14 17v3M4 10h3M4 14h3M17 10h3M17 14h3" />
+    <path d="M5 6h9M18 6h1M5 18h1M8 18h11" />
+    <circle cx="16" cy="6" r="2.1" />
+    <circle cx="6" cy="18" r="2.1" />
   </svg>
 );
 

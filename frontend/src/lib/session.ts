@@ -1,12 +1,5 @@
 import { Mic } from "./mic";
-import type {
-  EngineChoice,
-  FeedbackEvent,
-  MoshafConfig,
-  RuleSelection,
-  SessionEvent,
-  Span,
-} from "./types";
+import type { EngineChoice, FeedbackEvent, MoshafConfig, SessionEvent, Span } from "./types";
 
 const WS_URL = () => {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -15,6 +8,7 @@ const WS_URL = () => {
 
 export type SessionHandlers = {
   onFeedback: (e: FeedbackEvent) => void;
+  onPartial?: (e: PartialEvent) => void;
   onLevel: (level: number) => void;
   onState: (state: SessionStatus) => void;
   onError: (message: string) => void;
@@ -42,11 +36,6 @@ export class RecitationSession {
     private handlers: SessionHandlers,
     /** The reciter's moshaf attributes; omitted lets the backend use its own default. */
     private moshaf?: MoshafConfig | null,
-    /**
-     * Which tajwid rules to be graded on. `null`/undefined grades everything; an empty
-     * array is a real choice (hifz and tashkeel only) and IS sent.
-     */
-    private rules?: RuleSelection,
   ) {}
 
   async start(from: Span, engine?: EngineChoice): Promise<void> {
@@ -63,6 +52,7 @@ export class RecitationSession {
     ws.onmessage = (e) => {
       const msg: SessionEvent = JSON.parse(e.data);
       if (msg.type === "feedback") this.handlers.onFeedback(msg);
+      else if (msg.type === "partial") this.handlers.onPartial?.(msg);
       else if (msg.type === "session") this.handlers.onEngine?.(msg.engine);
     };
     ws.onclose = () => {
@@ -77,24 +67,19 @@ export class RecitationSession {
       return;
     }
 
-    // The start position SEEDS THE CURSOR. The protocol allows omitting it — the server
-    // then runs a cold whole-Quran search — but this app never should: the most common
-    // opening, the basmalah, is ambiguous with 27:30, so a position-less start would
-    // open by telling the reciter we cannot tell what they are reciting. We always know
-    // which sura they picked, so there is nothing to gain by making the server guess.
-    // `engine` and `moshaf` are omitted rather than sent empty when unset, so the
-    // server's own defaults pick (the resolved engine, and its default moshaf) rather
-    // than an empty value matching nothing — see api/ws.py's fallbacks for each.
-    // `rules` follows the same "omit when unset" rule but CANNOT use a truthiness test:
-    // `[]` is a deliberate selection (grade no tajwid rule) and must reach the server,
-    // where it means something different from an absent key.
+    // The start position SEEDS THE CURSOR, and must go first. Without it the session
+    // is identified by a cold whole-Quran search, and the most common opening there is
+    // — the basmalah — is ambiguous with 27:30, so the app would open by telling the
+    // reciter it cannot tell what they are reciting.
+    // `engine` is omitted rather than sent empty when unset, so the server's own
+    // default (Settings.resolved_asr_engine) picks rather than an empty string
+    // trying to match nothing (see api/ws.py's fallback).
     ws.send(
       JSON.stringify({
         type: "start",
         ...from,
-        ...(engine ? { engine } : {}),
         ...(this.moshaf ? { moshaf: this.moshaf } : {}),
-        ...(this.rules != null ? { rules: this.rules } : {}),
+        ...(engine ? { engine } : {}),
       }),
     );
 

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EnginePicker } from "./components/EnginePicker";
 import { FeedbackBar } from "./components/FeedbackBar";
 import {
+  BrainIcon,
   ChevronIcon,
-  ChipIcon,
   MaddStroke,
   MicIcon,
   SearchIcon,
@@ -13,16 +13,11 @@ import {
   StopIcon,
 } from "./components/Icons";
 import { MushafPage } from "./components/MushafPage";
-import { MistakesSheet, MoshafSheet, SearchSheet } from "./components/Sheets";
-import {
-  loadMoshafConfig,
-  loadRuleSelection,
-  saveMoshafConfig,
-  saveRuleSelection,
-} from "./lib/moshaf";
+import { IndexSheet, MistakesSheet, MoshafSheet } from "./components/Sheets";
+import { loadMoshafConfig, saveMoshafConfig } from "./lib/moshaf";
 import { cueMistake } from "./lib/cue";
 import { labelFor, loadHealth, loadStoredEngineChoice, storeEngineChoice } from "./lib/engines";
-import { accuracy, applyFeedback, emptyMarks, mistakesOnPage } from "./lib/marks";
+import { accuracy, applyFeedback, applyPartialFeedback, emptyMarks, mistakesOnPage } from "./lib/marks";
 import { PAGES, loadPageReady, loadSuraIndex, pageOf, spanKey, wordKey } from "./lib/mushaf";
 import { RecitationSession, type SessionStatus } from "./lib/session";
 import type {
@@ -50,8 +45,6 @@ export default function App() {
   const [sheet, setSheet] = useState<"index" | "mistakes" | "moshaf" | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [moshaf, setMoshaf] = useState(loadMoshafConfig);
-  // null = every rule graded (the default). See lib/types RuleSelection: `[]` differs.
-  const [rules, setRules] = useState(loadRuleSelection);
 
   const [engineChoice, setEngineChoice] = useState<EngineChoice>(() => loadStoredEngineChoice() ?? "real");
   const [availableEngines, setAvailableEngines] = useState<Set<string> | null>(null);
@@ -76,12 +69,9 @@ export default function App() {
       .then((h) => {
         const avail = new Set(h.available_engines);
         setAvailableEngines(avail);
-        // The stored/default pick might not exist on THIS server (no GPU, say) —
-        // Zipformer is always built (see main.py's build_engines), so it's the one
-        // safe fallback to land on rather than silently keep an unusable choice.
         setEngineChoice((current) => (avail.has(current) ? current : avail.has("zipformer") ? "zipformer" : current));
       })
-      .catch(() => {}); // a nicety, not a requirement — start() still works unverified
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -94,8 +84,6 @@ export default function App() {
     };
   }, [page]);
 
-  // The next page's font and data, fetched while the reciter is still on this one.
-  // A page that arrives late is a page the reciter is already reciting from memory.
   useEffect(() => {
     if (page < PAGES) void loadPageReady(page + 1).catch(() => {});
   }, [page]);
@@ -111,7 +99,6 @@ export default function App() {
   const onFeedback = useCallback((event: Parameters<typeof applyFeedback>[1]) => {
     setMarks((prev) => {
       const next = applyFeedback(prev, event);
-      // Sound only on a CONFIDENT new mistake — see lib/cue.
       if (soundRef.current && next.log.length > prev.log.length) {
         if (next.log.slice(prev.log.length).some((m) => m.status === "error")) {
           cueMistake();
@@ -127,28 +114,34 @@ export default function App() {
 
   const start = useCallback(async () => {
     if (!cursor) return;
+    if (session.current) {
+      await session.current.stop();
+      session.current = null;
+    }
     const s = new RecitationSession(
       {
         onFeedback,
+        onPartial: (event) => {
+          if (event.cursor) setCursor(event.cursor);
+          if (event.feedback) {
+            setMarks((prev) => applyPartialFeedback(prev, event, false));
+          }
+        },
         onLevel: setLevel,
         onState: setStatus,
         onError: setToast,
         onEngine: (engine) => {
           setActiveEngine(engine);
-          // engine !== requested means api/ws.py couldn't honour the pick (not built
-          // on this server, or unreachable) and silently fell back — tell the reciter,
-          // since it changes what kind of feedback they're about to get.
           if (engine !== engineChoice) {
             setToast(`تعذّر تشغيل «${labelFor(engineChoice)}»؛ يعمل الآن بمحرك ${labelFor(engine)}.`);
           }
         },
       },
       moshaf,
-      rules,
     );
     session.current = s;
     await s.start(cursor, engineChoice);
-  }, [cursor, onFeedback, engineChoice, moshaf, rules]);
+  }, [cursor, onFeedback, moshaf, engineChoice]);
 
   const stop = useCallback(async () => {
     await session.current?.stop();
@@ -315,17 +308,6 @@ export default function App() {
     [],
   );
 
-  /** A search hit: open the page that holds this āyah and seed the tracker on its first
-   * word, so the reciter can start reciting from the result they just found. */
-  const pickAyah = useCallback(async (sura: number, aya: number) => {
-    setSheet(null);
-    const at = { sura, aya, word_idx: 0 };
-    setCursor(at);
-    session.current?.seek(at);
-    const p = await pageOf(sura, aya, 0);
-    if (p) setPage(p);
-  }, []);
-
   /** Tapping a word repositions the session there. */
   const onWord = useCallback((w: MushafWord) => {
     if (!w.word_idxs.length) return;
@@ -350,24 +332,20 @@ export default function App() {
 
         <div className="topbar__actions">
           <button
+            className={`iconbtn${moshaf ? " iconbtn--set" : ""}`}
+            onClick={() => setSheet("moshaf")}
+            title="خصائص المصحف والتلاوة"
+          >
+            <SlidersIcon />
+          </button>
+          <button
             className="iconbtn"
             onClick={() => setEnginePickerOpen((o) => !o)}
             aria-pressed={enginePickerOpen}
             aria-haspopup="menu"
             title={`محرك التعرّف الصوتي: ${labelFor(activeEngine ?? engineChoice)}`}
           >
-            <ChipIcon />
-          </button>
-          <button
-            className={`iconbtn${moshaf || rules ? " iconbtn--set" : ""}`}
-            onClick={() => setSheet("moshaf")}
-            title={
-              rules
-                ? `خصائص المصحف والتلاوة — التقييم مقصور على ${rules.length} حكمًا`
-                : "خصائص المصحف والتلاوة"
-            }
-          >
-            <SlidersIcon />
+            <BrainIcon />
           </button>
           <button
             className="iconbtn"
@@ -444,12 +422,7 @@ export default function App() {
       />
 
       {sheet === "index" && (
-        <SearchSheet
-          suras={suras}
-          onPick={pickSura}
-          onPickAyah={pickAyah}
-          onClose={() => setSheet(null)}
-        />
+        <IndexSheet suras={suras} onPick={pickSura} onClose={() => setSheet(null)} />
       )}
       {sheet === "mistakes" && (
         <MistakesSheet log={marks.log} suras={suras} onClose={() => setSheet(null)} />
@@ -457,16 +430,11 @@ export default function App() {
       {sheet === "moshaf" && (
         <MoshafSheet
           value={moshaf}
-          rules={rules}
-          onSave={(cfg, sel) => {
+          onSave={(cfg) => {
             setMoshaf(cfg);
             saveMoshafConfig(cfg);
-            setRules(sel);
-            saveRuleSelection(sel);
             setToast(
-              cfg || sel
-                ? "حُفظت خصائص التلاوة — تُطبَّق على الجلسة التالية."
-                : "أُعيد الوضع الافتراضي.",
+              cfg ? "حُفظت خصائص التلاوة — تُطبَّق على الجلسة التالية." : "أُعيد الوضع الافتراضي.",
             );
           }}
           onClose={() => setSheet(null)}
