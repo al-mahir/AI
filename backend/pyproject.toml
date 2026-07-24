@@ -26,6 +26,10 @@ dependencies = [
     "fuzzysearch>=0.8.1",
     "xmltodict",                    # quran_transcript
     "sherpa-onnx>=1.10.0",           # ZipformerAsrEngine (CPU ONNX runtime, no torch needed for it)
+    # Āyah search: BGE-M3 embeddings over a FAISS cosine index (data/search/*)
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8.0",
+    "openai>=1.40",                  # HyDE query expansion; any OpenAI-compatible provider
     # Service
     "fastapi>=0.116.1",
     "uvicorn[standard]>=0.35.0",
