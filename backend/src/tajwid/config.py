@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # Speech probability threshold for speech ONSET. During active speech,
     # stream.py uses a lower threshold (vad_threshold - vad_hysteresis_offset) plus
     # an RMS energy guard to protect sustained held vowels (6-Harakat Madd like الضالين).
-    vad_threshold: float = 0.6
+    vad_threshold: float = 0.5
     # How much to lower vad_threshold when MAINTAINING speech (dual-threshold hysteresis).
     # Prevents VAD from cutting mid-word during brief probability dips in held vowels.
     vad_hysteresis_offset: float = 0.05
@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     max_chunk_s_zipformer: float = 30.0
     # Padding added around a finalized speech region before inference (see stream.py).
     # Keep lead pad minimal (100ms) so we don't capture pre-speech breath/inhalation noise.
-    chunk_lead_pad_ms: int = 100
+    chunk_lead_pad_ms: int = 120
     # 240ms trail pad gives CTC encoders enough trailing silence to flush final consonants (م, ن).
     chunk_trail_pad_ms: int = 240
 
