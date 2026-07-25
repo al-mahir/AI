@@ -73,21 +73,22 @@ class Settings(BaseSettings):
     vad_threshold: float = 0.6
     # How much to lower vad_threshold when MAINTAINING speech (dual-threshold hysteresis).
     # Prevents VAD from cutting mid-word during brief probability dips in held vowels.
-    vad_hysteresis_offset: float = 0.1
+    vad_hysteresis_offset: float = 0.05
     # RMS energy floor: if the audio frame's RMS exceeds this, speech is maintained even
     # when the neural VAD probability dips. Protects sustained vocalisation (Madd).
-    rms_speech_threshold: float = 0.018
+    rms_speech_threshold: float = 0.02
     # A silence run at least this long *after* speech finalizes a chunk (a waqf).
     min_silence_endpoint_ms: int = 300
     # Discard finalized speech shorter than this as noise (breaths/clicks).
     min_speech_ms: int = 200
     # Hard cap per chunk: the Muaalem model was trained on <=20 s waqf segments.
-    max_chunk_s: float = 19.0
+    max_chunk_s_muaalem: float = 19.0
+    max_chunk_s_zipformer: float = 30.0
     # Padding added around a finalized speech region before inference (see stream.py).
     # Keep lead pad minimal (100ms) so we don't capture pre-speech breath/inhalation noise.
-    chunk_lead_pad_ms: int = 100
+    chunk_lead_pad_ms: int = 150
     # 200ms trail pad gives CTC encoders enough trailing silence to flush final consonants (م, ن).
-    chunk_trail_pad_ms: int = 200
+    chunk_trail_pad_ms: int = 250
 
     # --- W2V-BERT segmenter (chunker for the offline whole-file batch path) ---
     segmenter_batch_size: int = 8
@@ -158,10 +159,6 @@ class Settings(BaseSettings):
     @property
     def resolved_vad_device(self) -> str:
         return self.vad_device or "cpu"
-
-    @property
-    def max_chunk_samples(self) -> int:
-        return int(self.max_chunk_s * self.sample_rate)
 
     @property
     def min_silence_endpoint_samples(self) -> int:

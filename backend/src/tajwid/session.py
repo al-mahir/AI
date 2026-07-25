@@ -164,7 +164,11 @@ class LiveSession:
         self.engine = engine
         self._is_streaming = is_streaming(engine)
         self.stream_processor = engine.create_stream_processor() if self._is_streaming else None
-        self.stream = StreamSession(load_vad(), self.s)
+        
+        # Zipformer is streaming, Muaalem/Mock are chunk.
+        max_chunk_s = self.s.max_chunk_s_zipformer if self._is_streaming else self.s.max_chunk_s_muaalem
+        self.stream = StreamSession(load_vad(), self.s, max_chunk_samples=int(max_chunk_s * self.s.sample_rate))
+        
         self.state = SessionState(
             moshaf=moshaf or default_moshaf(self.s),
             session_id=session_id,
