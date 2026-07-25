@@ -362,7 +362,7 @@ class ZipformerStreamProcessor:
         tail_padding = (
             np.zeros(0, dtype=np.float32)
             if forced
-            else np.zeros(int(0.66 * sample_rate), dtype=np.float32)
+            else np.zeros(int(0.6 * sample_rate), dtype=np.float32)
         )
         full_audio = np.concatenate([raw_pcm, tail_padding])
 
