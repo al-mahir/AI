@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     max_chunk_s_zipformer: float = 30.0
     # Padding added around a finalized speech region before inference (see stream.py).
     # Keep lead pad minimal (100ms) so we don't capture pre-speech breath/inhalation noise.
-    chunk_lead_pad_ms: int = 150
+    chunk_lead_pad_ms: int = 120
     # 200ms trail pad gives CTC encoders enough trailing silence to flush final consonants (م, ن).
     chunk_trail_pad_ms: int = 250
 
