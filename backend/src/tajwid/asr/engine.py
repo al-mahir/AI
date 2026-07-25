@@ -33,14 +33,18 @@ to Settings.resolved_asr_engine's choice for an unknown/omitted name.
 
 from __future__ import annotations
 
+import logging
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Protocol, Union
 
 import numpy as np
 import torch
 
 from ..config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 from quran_transcript import Aya
 
 from ..feedback.mock import shorten_a_madd
