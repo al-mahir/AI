@@ -73,10 +73,10 @@ class Settings(BaseSettings):
     vad_threshold: float = 0.6
     # How much to lower vad_threshold when MAINTAINING speech (dual-threshold hysteresis).
     # Prevents VAD from cutting mid-word during brief probability dips in held vowels.
-    vad_hysteresis_offset: float = 0.05
+    vad_hysteresis_offset: float = 0.1
     # RMS energy floor: if the audio frame's RMS exceeds this, speech is maintained even
     # when the neural VAD probability dips. Protects sustained vocalisation (Madd).
-    rms_speech_threshold: float = 0.02
+    rms_speech_threshold: float = 0.018
     # A silence run at least this long *after* speech finalizes a chunk (a waqf).
     min_silence_endpoint_ms: int = 300
     # Discard finalized speech shorter than this as noise (breaths/clicks).
