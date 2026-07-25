@@ -78,7 +78,7 @@ class StreamSession:
                     self._speech_start_abs, self._last_speech_end_abs, forced=False
                 )
             )
-            self._reset_after_finalize(self._last_speech_end_abs, reset_vad=True)
+            self._reset_after_finalize(self._last_speech_end_abs, reset_vad=False)
         return chunks
 
     # -- internals --------------------------------------------------------
@@ -130,7 +130,7 @@ class StreamSession:
                             forced=False,
                         )
                     )
-                self._reset_after_finalize(w_end_abs, reset_vad=True)
+                self._reset_after_finalize(w_end_abs, reset_vad=False)
                 n_windows = self._buffer.numel() // self.window
                 continue
 

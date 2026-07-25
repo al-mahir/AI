@@ -359,24 +359,12 @@ class ZipformerStreamProcessor:
             self.reset()
             return ChunkTranscript(phonemes_text="", char_probs=[], groups=[], group_probs=[], sifat=[])
 
-        # Apply a 10ms fade-in to the VAD chunk before prepending digital silence.
-        # This prevents a sharp step-function (click) at the junction between the 0s
-        # and the ambient background noise. Zipformer often misinterprets this click
-        # as a transient consonant (ي or ه).
-        fade_len = int(0.01 * sample_rate)
-        if raw_pcm.size > fade_len:
-            fade = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
-            raw_pcm[:fade_len] *= fade
-
-        # Pad wave with 0.30s lead silence (300ms CTC warm-up) and 0.50s trail silence (500ms flush).
-        # Digital silence padding for CTC warm-up is handled by ZipformerStreamProcessor.finalize().
-        lead_padding = np.zeros(int(0.3 * sample_rate), dtype=np.float32)
         tail_padding = (
             np.zeros(0, dtype=np.float32)
             if forced
             else np.zeros(int(0.66 * sample_rate), dtype=np.float32)
         )
-        full_audio = np.concatenate([lead_padding, raw_pcm, tail_padding])
+        full_audio = np.concatenate([raw_pcm, tail_padding])
 
         # Decode on an isolated stream
         chunk_stream = self._recognizer.create_stream()

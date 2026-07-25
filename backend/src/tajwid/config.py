@@ -84,9 +84,9 @@ class Settings(BaseSettings):
     # Hard cap per chunk: the Muaalem model was trained on <=20 s waqf segments.
     max_chunk_s: float = 19.0
     # Padding added around a finalized speech region before inference (see stream.py).
-    # Keep lead pad minimal (20ms) so we don't capture pre-speech breath/inhalation noise.
-    chunk_lead_pad_ms: int = 20
-    # 500ms trail pad gives CTC encoders enough trailing silence to flush final consonants (م, ن).
+    # Keep lead pad minimal (100ms) so we don't capture pre-speech breath/inhalation noise.
+    chunk_lead_pad_ms: int = 100
+    # 200ms trail pad gives CTC encoders enough trailing silence to flush final consonants (م, ن).
     chunk_trail_pad_ms: int = 200
 
     # --- W2V-BERT segmenter (chunker for the offline whole-file batch path) ---
