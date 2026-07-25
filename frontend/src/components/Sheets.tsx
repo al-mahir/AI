@@ -77,7 +77,6 @@ export function SearchSheet({
   // `hyde` is a dependency too: toggling it re-runs the query it applies to.
   const term = mode === "keyword" ? q.trim() : mode === "meaning" ? submitted : "";
   useEffect(() => {
-    abort.current?.abort();
     if (!term) {
       setResult(null);
       setBusy(false);
