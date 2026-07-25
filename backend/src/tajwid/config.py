@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # Speech probability threshold for speech ONSET. During active speech,
     # stream.py uses a lower threshold (vad_threshold - vad_hysteresis_offset) plus
     # an RMS energy guard to protect sustained held vowels (6-Harakat Madd like الضالين).
-    vad_threshold: float = 0.5
+    vad_threshold: float = 0.6
     # How much to lower vad_threshold when MAINTAINING speech (dual-threshold hysteresis).
     # Prevents VAD from cutting mid-word during brief probability dips in held vowels.
     vad_hysteresis_offset: float = 0.05
