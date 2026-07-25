@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     # Keep lead pad minimal (100ms) so we don't capture pre-speech breath/inhalation noise.
     chunk_lead_pad_ms: int = 120
     # 200ms trail pad gives CTC encoders enough trailing silence to flush final consonants (م, ن).
-    chunk_trail_pad_ms: int = 250
+    chunk_trail_pad_ms: int = 240
 
     # --- W2V-BERT segmenter (chunker for the offline whole-file batch path) ---
     segmenter_batch_size: int = 8
