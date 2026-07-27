@@ -74,7 +74,7 @@ def _strip_tail(groups: list[str], marker: str) -> int:
 
 
 def strip_non_verse(
-    phonemes: str, moshaf: MoshafAttributes
+    phonemes: str, moshaf: MoshafAttributes, sura: int | None = None
 ) -> tuple[str, list[str], int, int]:
     """Remove istiʿādhah / basmalah / ṣadaqa, returning what is left and what was found.
 
@@ -82,9 +82,11 @@ def strip_non_verse(
 
     BASMALAH IS THE ONE WITH TEETH. It opens 113 suras as non-verse text, but it *is*
     Al-Fatiha 1:1 — an actual verse a learner may be reciting and expecting to be
-    marked on. So it is only stripped when something FOLLOWS it. A chunk that is
-    nothing but basmalah is left alone, because deleting it could silently erase a
-    legitimately recited verse, and locate() can identify it perfectly well.
+    marked on.
+
+    When sura is known and sura != 1 (the learner is at one of the other 112 suras),
+    basmalah is ALWAYS non-verse opening text, even if recited alone in a chunk.
+    Otherwise (sura is 1 or unknown), it is only stripped when something follows it.
 
     Returns `(remainder, found, start_char, end_char)`. The char offsets are into the
     ORIGINAL phoneme string, and the caller MUST use them to slice `phonemes.probs` to
@@ -105,8 +107,8 @@ def strip_non_verse(
         found.append("istiaatha")
 
     n = _strip_head(groups, markers["basmalah"])
-    # Only non-verse if the reciter carried on into something else.
-    if n and len(groups) > n:
+    # Non-verse if the reciter carried on into something else, OR if we know they are at one of the other 112 suras.
+    if n and (len(groups) > n or (sura is not None and sura != 1)):
         start += sum(len(g) for g in groups[:n])
         groups = groups[n:]
         found.append("basmalah")

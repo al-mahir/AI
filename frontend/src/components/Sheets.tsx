@@ -77,7 +77,6 @@ export function SearchSheet({
   // `hyde` is a dependency too: toggling it re-runs the query it applies to.
   const term = mode === "keyword" ? q.trim() : mode === "meaning" ? submitted : "";
   useEffect(() => {
-    abort.current?.abort();
     if (!term) {
       setResult(null);
       setBusy(false);
@@ -209,19 +208,19 @@ export function SearchSheet({
               <p className="searchnote">تعذّر التوسيع بالذكاء الاصطناعي — نتائج البحث المعتاد.</p>
             )}
             {result.hits.map((h) => (
-            <button
-              key={`${h.sura}:${h.aya}`}
-              className="ayahrow"
-              onClick={() => onPickAyah(h.sura, h.aya)}
-            >
-              <div className="ayahrow__text">{h.text_uthmani}</div>
-              <div className="ayahrow__meta">
-                <span>
-                  {suras.find((s) => s.sura === h.sura)?.name_ar ?? h.sura} · {h.sura}:{h.aya}
-                </span>
-                {h.translation && <span className="ayahrow__tr">{h.translation}</span>}
-              </div>
-            </button>
+              <button
+                key={`${h.sura}:${h.aya}`}
+                className="ayahrow"
+                onClick={() => onPickAyah(h.sura, h.aya)}
+              >
+                <div className="ayahrow__text">{h.text_uthmani}</div>
+                <div className="ayahrow__meta">
+                  <span>
+                    {suras.find((s) => s.sura === h.sura)?.name_ar ?? h.sura} · {h.sura}:{h.aya}
+                  </span>
+                  {h.translation && <span className="ayahrow__tr">{h.translation}</span>}
+                </div>
+              </button>
             ))}
           </>
         )}
@@ -328,14 +327,13 @@ export function MoshafSheet({
     // sheet over the optional half would be a worse trade than losing the new feature.
     loadRuleCatalogue()
       .then((rs) => live && setCatalogue(rs))
-      .catch(() => {});
+      .catch(() => { });
     return () => {
       live = false;
     };
   }, [value]);
 
   useEffect(() => setSel(rules), [rules]);
-
   const set = (key: string, v: string | number) => setCfg((c) => ({ ...c, [key]: v }));
 
   const toggleRule = (key: string) =>
@@ -356,7 +354,6 @@ export function MoshafSheet({
     if (fields) setCfg(defaultConfig(fields));
     setSel(null);
   };
-
   return (
     <div className="sheet" role="dialog" aria-label="إعدادات التلاوة">
       <div className="sheet__bar">

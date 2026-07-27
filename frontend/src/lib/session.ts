@@ -15,6 +15,7 @@ const WS_URL = () => {
 
 export type SessionHandlers = {
   onFeedback: (e: FeedbackEvent) => void;
+  onPartial?: (e: PartialEvent) => void;
   onLevel: (level: number) => void;
   onState: (state: SessionStatus) => void;
   onError: (message: string) => void;
@@ -47,7 +48,7 @@ export class RecitationSession {
      * array is a real choice (hifz and tashkeel only) and IS sent.
      */
     private rules?: RuleSelection,
-  ) {}
+  ) { }
 
   async start(from: Span, engine?: EngineChoice): Promise<void> {
     this.set("connecting");
@@ -63,6 +64,7 @@ export class RecitationSession {
     ws.onmessage = (e) => {
       const msg: SessionEvent = JSON.parse(e.data);
       if (msg.type === "feedback") this.handlers.onFeedback(msg);
+      else if (msg.type === "partial") this.handlers.onPartial?.(msg);
       else if (msg.type === "session") this.handlers.onEngine?.(msg.engine);
     };
     ws.onclose = () => {

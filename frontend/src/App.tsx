@@ -22,7 +22,7 @@ import {
 } from "./lib/moshaf";
 import { cueMistake } from "./lib/cue";
 import { labelFor, loadHealth, loadStoredEngineChoice, storeEngineChoice } from "./lib/engines";
-import { accuracy, applyFeedback, emptyMarks, mistakesOnPage } from "./lib/marks";
+import { accuracy, applyFeedback, applyPartialFeedback, emptyMarks, mistakesOnPage } from "./lib/marks";
 import { PAGES, loadPageReady, loadSuraIndex, pageOf, spanKey, wordKey } from "./lib/mushaf";
 import { RecitationSession, type SessionStatus } from "./lib/session";
 import type {
@@ -76,12 +76,9 @@ export default function App() {
       .then((h) => {
         const avail = new Set(h.available_engines);
         setAvailableEngines(avail);
-        // The stored/default pick might not exist on THIS server (no GPU, say) —
-        // Zipformer is always built (see main.py's build_engines), so it's the one
-        // safe fallback to land on rather than silently keep an unusable choice.
         setEngineChoice((current) => (avail.has(current) ? current : avail.has("zipformer") ? "zipformer" : current));
       })
-      .catch(() => {}); // a nicety, not a requirement — start() still works unverified
+      .catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -94,10 +91,8 @@ export default function App() {
     };
   }, [page]);
 
-  // The next page's font and data, fetched while the reciter is still on this one.
-  // A page that arrives late is a page the reciter is already reciting from memory.
   useEffect(() => {
-    if (page < PAGES) void loadPageReady(page + 1).catch(() => {});
+    if (page < PAGES) void loadPageReady(page + 1).catch(() => { });
   }, [page]);
 
   useEffect(() => {
@@ -111,7 +106,6 @@ export default function App() {
   const onFeedback = useCallback((event: Parameters<typeof applyFeedback>[1]) => {
     setMarks((prev) => {
       const next = applyFeedback(prev, event);
-      // Sound only on a CONFIDENT new mistake — see lib/cue.
       if (soundRef.current && next.log.length > prev.log.length) {
         if (next.log.slice(prev.log.length).some((m) => m.status === "error")) {
           cueMistake();
@@ -127,17 +121,24 @@ export default function App() {
 
   const start = useCallback(async () => {
     if (!cursor) return;
+    if (session.current) {
+      await session.current.stop();
+      session.current = null;
+    }
     const s = new RecitationSession(
       {
         onFeedback,
+        onPartial: (event) => {
+          if (event.cursor) setCursor(event.cursor);
+          if (event.feedback) {
+            setMarks((prev) => applyPartialFeedback(prev, event, false));
+          }
+        },
         onLevel: setLevel,
         onState: setStatus,
         onError: setToast,
         onEngine: (engine) => {
           setActiveEngine(engine);
-          // engine !== requested means api/ws.py couldn't honour the pick (not built
-          // on this server, or unreachable) and silently fell back — tell the reciter,
-          // since it changes what kind of feedback they're about to get.
           if (engine !== engineChoice) {
             setToast(`تعذّر تشغيل «${labelFor(engineChoice)}»؛ يعمل الآن بمحرك ${labelFor(engine)}.`);
           }

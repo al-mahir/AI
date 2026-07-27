@@ -152,16 +152,20 @@ def track(
     if cursor_ord is None:
         return LocateResult(status="no_match")
 
-    # Window bounds, following tasmeea.estimate_window_len: a chunk of N normalised
-    # chars spans somewhere between N/9 and N/2 words.
-    min_window = max(1, len(query) // 9)
-    max_window = max(min_window, len(query) // 2 + 1)
+    # Window bounds: realistic word count bounds based on Arabic phonetic length (~4-5 phonemes/word)
+    min_window = max(1, len(query) // 8)
+    max_window = max(min_window, int(len(query) // 3.5) + 1)
+
+    # For small queries (< 8 phonemes, ~1-2 short words), constrain the forward search window
+    # so a tiny ambiguous snippet cannot jump the cursor far ahead over missing words.
+    max_forward = 3 if len(query) < 8 else window_words
 
     n_total = len(_word_starts())
+    best_score = 0.0
     best_ratio = 0.0
     best: tuple[int, int] | None = None  # (start_ordinal, n_words)
 
-    for offset in range(-overlap_words, window_words):
+    for offset in range(-overlap_words, max_forward):
         start_ord = cursor_ord + offset
         if start_ord < 0 or start_ord >= n_total:
             continue
@@ -172,7 +176,14 @@ def track(
                 continue
 
             ratio = _match_ratio(candidate, query)
-            if ratio > best_ratio:
+            # Length-compatibility factor: penalize candidate spans whose character length
+            # diverges significantly from the query length, preventing small chunks from
+            # matching multi-word overshooting spans.
+            len_ratio = min(len(candidate), len(query)) / max(len(candidate), len(query))
+            score = ratio * (0.6 + 0.4 * len_ratio)
+
+            if score > best_score:
+                best_score = score
                 best_ratio = ratio
                 best = (start_ord, n_words)
 

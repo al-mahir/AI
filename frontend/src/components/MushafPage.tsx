@@ -172,9 +172,7 @@ function Word({
     .join(" ");
 
   // The rich detail panel is worth showing only when we have something to say about the
-  // word: a verdict, a boundary note, or at least a fault we can stand behind. Zipformer
-  // has no sifat and no backed tajweed, so its only showable faults are phoneme-level
-  // (normal/tashkeel) — mirror that here so we never open an empty panel for it.
+  // word: a verdict, a boundary note, or at least the word itself once it has been read.
   const [open, setOpen] = useState(false);
   const showable =
     engine === "zipformer"
@@ -404,17 +402,19 @@ function WordDetail({
                     <span className="worddetail__v">{r.v}</span>
                   </div>
                 ))}
-                <div className="worddetail__conf">
-                  <span className="worddetail__k">الثقة</span>
-                  {conf.pct == null ? (
-                    <span className="worddetail__v">{conf.text}</span>
-                  ) : (
-                    <span className="worddetail__bar" aria-label={conf.text}>
-                      <span style={{ width: `${conf.pct}%` }} />
-                      <em>{conf.text}</em>
-                    </span>
-                  )}
-                </div>
+                {e.confidence !== 0.999 && (
+                  <div className="worddetail__conf">
+                    <span className="worddetail__k">الثقة</span>
+                    {conf.pct == null ? (
+                      <span className="worddetail__v">{conf.text}</span>
+                    ) : (
+                      <span className="worddetail__bar" aria-label={conf.text}>
+                        <span style={{ width: `${conf.pct}%` }} />
+                        <em>{conf.text}</em>
+                      </span>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}

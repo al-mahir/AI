@@ -81,7 +81,7 @@ def test_ws_session_can_select_zipformer_engine_per_session(client):
     zipformer model files aren't staged (same convention as test_zipformer_engine.py)."""
     from pathlib import Path
 
-    model = Path(__file__).resolve().parents[1] / "models" / "asr_zipformer" / "quran_phoneme_zipformer.int8.onnx"
+    model = Path(__file__).resolve().parents[1] / "models" / "asr_zipformer" / "quran_phoneme_zipformer.onnx"
     tokens = Path(__file__).resolve().parents[1] / "models" / "asr_zipformer" / "tokens.txt"
     if not model.exists() or not tokens.exists():
         pytest.skip("zipformer model/tokens not present under models/asr_zipformer/")

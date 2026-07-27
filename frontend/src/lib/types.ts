@@ -123,9 +123,12 @@ export type FeedbackEvent = {
   cursor: Span | null;
 };
 
+export type PartialEvent = { type: "partial"; phonemes: string; cursor?: Span; feedback?: FeedbackResponse };
+
 export type SessionEvent =
   | { type: "session"; session_id: string; engine: string; sample_rate: number }
   | FeedbackEvent
+  | PartialEvent
   | { type: "done" };
 
 // --- ASR engine choice ----------------------------------------------------

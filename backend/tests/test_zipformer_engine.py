@@ -10,7 +10,7 @@ from tajwid.asr.batch import load_audio
 ASSETS = Path(__file__).resolve().parent / "assets"
 FATIHA = ASSETS / "fatiha_long_track.wav"
 
-MODEL = Path(__file__).resolve().parents[1] / "models" / "asr_zipformer" / "quran_phoneme_zipformer.int8.onnx"
+MODEL = Path(__file__).resolve().parents[1] / "models" / "asr_zipformer" / "quran_phoneme_zipformer.onnx"
 TOKENS = Path(__file__).resolve().parents[1] / "models" / "asr_zipformer" / "tokens.txt"
 
 
@@ -50,16 +50,12 @@ def test_char_probs_are_honestly_unscored_not_fabricated(zipformer_engine):
 def test_sifat_are_all_none(zipformer_engine):
     """Zipformer has no tajweed/sifat detection — every attribute of every
     group's Sifa must be None, not a guessed value."""
-    from tajwid.asr.engine import SIFA_ATTRS
 
     wave = load_audio(FATIHA, 16000)[: 16000 * 5]
 
     transcript = zipformer_engine.transcribe_chunk(wave, 16000)
 
-    assert transcript.sifat, "expected at least one group from 5s of real recitation"
-    for sifa in transcript.sifat:
-        for attr in SIFA_ATTRS:
-            assert getattr(sifa, attr) is None
+    assert not transcript.sifat, "Zipformer should not emit fake sifat"
 
 
 def test_empty_audio_returns_empty_transcript(zipformer_engine):

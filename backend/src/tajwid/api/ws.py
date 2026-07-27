@@ -31,6 +31,12 @@ Protocol (all text messages are JSON):
 
   server -> client
     {"type":"session", "session_id", "engine"}         on start.
+    {"type":"partial", "phonemes": "..."}              streaming engines only: emitted
+                                                       on every audio frame that changes
+                                                       the partial decode hypothesis.
+                                                       Not emitted for ChunkEngine
+                                                       (Muaalem/Mock). Superseded by
+                                                       the next "feedback" event.
     {"type":"feedback", ...}                           one per finalized waqf chunk
                                                        (see tajwid.session.LiveSession).
     {"type":"done"}                                    after the end-of-stream flush.
@@ -44,6 +50,8 @@ import uuid
 
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from quran_transcript import MoshafAttributes
 
 from ..config import get_settings
 from ..feedback.types import Span

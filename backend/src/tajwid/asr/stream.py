@@ -41,10 +41,11 @@ class StreamSession:
     bundle — so live endpointing works identically under the mock ASR engine.
     """
 
-    def __init__(self, vad: torch.jit.ScriptModule, settings: Settings | None = None):
+    def __init__(self, vad: torch.jit.ScriptModule, settings: Settings | None = None, max_chunk_samples: int | None = None):
         self.vad = vad
         self.s = settings or get_settings()
         self.window = self.s.vad_window_samples
+        self.max_chunk_samples = max_chunk_samples if max_chunk_samples is not None else int(19.0 * self.s.sample_rate)
 
         # Absolute sample index of buffer[0].
         self._buffer_start_abs = 0
@@ -78,7 +79,7 @@ class StreamSession:
                     self._speech_start_abs, self._last_speech_end_abs, forced=False
                 )
             )
-            self._reset_after_finalize(self._last_speech_end_abs, reset_vad=True)
+            self._reset_after_finalize(self._last_speech_end_abs, reset_vad=False)
         return chunks
 
     # -- internals --------------------------------------------------------
@@ -94,7 +95,17 @@ class StreamSession:
                 prob = float(self.vad(window, self.s.sample_rate))
             self._fed_windows += 1
             w_end_abs = w_start_abs + self.window
-            is_speech = prob > self.s.vad_threshold
+            # Dual-Threshold Hysteresis + RMS Energy Guard:
+            # - To START speech: require prob > vad_threshold.
+            # - To MAINTAIN speech: stay in speech if prob > (vad_threshold - hysteresis) OR
+            #   if RMS > rms_speech_threshold (active vocal energy). Sustained held vowels
+            #   (6-Harakat Madd like الضالين) have high RMS even if neural VAD probability dips.
+            rms = float(torch.sqrt(torch.mean(window ** 2)))
+            # print(f"Prob: {prob:.4f} | RMS: {rms:.4f}")
+            if self._in_speech:
+                is_speech = (prob > (self.s.vad_threshold - self.s.vad_hysteresis_offset)) or (rms > self.s.rms_speech_threshold)
+            else:
+                is_speech = prob > self.s.vad_threshold
 
             if is_speech:
                 if not self._in_speech:
@@ -120,14 +131,14 @@ class StreamSession:
                             forced=False,
                         )
                     )
-                self._reset_after_finalize(w_end_abs, reset_vad=True)
+                self._reset_after_finalize(w_end_abs, reset_vad=False)
                 n_windows = self._buffer.numel() // self.window
                 continue
 
             # Hard cap: force-cut an over-long utterance.
             if (
                 self._in_speech
-                and (w_end_abs - self._speech_start_abs) >= self.s.max_chunk_samples
+                and (w_end_abs - self._speech_start_abs) >= self.max_chunk_samples
             ):
                 chunks.append(
                     self._extract(self._speech_start_abs, w_end_abs, forced=True)

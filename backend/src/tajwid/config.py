@@ -24,7 +24,6 @@ class Settings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
-
     # --- Engine selection ------------------------------------------------
     # "real" loads the GPU models; "mock" fabricates model output from the
     # phonetizer (no torch models, runs anywhere); "auto" picks real iff CUDA
@@ -68,17 +67,27 @@ class Settings(BaseSettings):
     # --- Streaming endpointing (silero VAD gate) -------------------------
     # silero v4 operates on fixed 1536-sample windows (~96 ms at 16 kHz).
     vad_window_samples: int = 1536
-    # Speech-probability threshold. 0.6 (not 0.3) so the shallow, short dips at a waqf
-    # in continuous recitation register as silence.
+    # Speech probability threshold for speech ONSET. During active speech,
+    # stream.py uses a lower threshold (vad_threshold - vad_hysteresis_offset) plus
+    # an RMS energy guard to protect sustained held vowels (6-Harakat Madd like الضالين).
     vad_threshold: float = 0.6
+    # How much to lower vad_threshold when MAINTAINING speech (dual-threshold hysteresis).
+    # Prevents VAD from cutting mid-word during brief probability dips in held vowels.
+    vad_hysteresis_offset: float = 0.05
+    # RMS energy floor: if the audio frame's RMS exceeds this, speech is maintained even
+    # when the neural VAD probability dips. Protects sustained vocalisation (Madd).
+    rms_speech_threshold: float = 0.02
     # A silence run at least this long *after* speech finalizes a chunk (a waqf).
     min_silence_endpoint_ms: int = 300
     # Discard finalized speech shorter than this as noise (breaths/clicks).
     min_speech_ms: int = 200
     # Hard cap per chunk: the Muaalem model was trained on <=20 s waqf segments.
-    max_chunk_s: float = 19.0
+    max_chunk_s_muaalem: float = 19.0
+    max_chunk_s_zipformer: float = 30.0
     # Padding added around a finalized speech region before inference (see stream.py).
+    # Keep lead pad minimal (120ms) so we don't capture pre-speech breath/inhalation noise.
     chunk_lead_pad_ms: int = 120
+    # 240ms trail pad gives CTC encoders enough trailing silence to flush final consonants (م, ن).
     chunk_trail_pad_ms: int = 240
 
     # --- W2V-BERT segmenter (chunker for the offline whole-file batch path) ---
@@ -150,10 +159,6 @@ class Settings(BaseSettings):
     @property
     def resolved_vad_device(self) -> str:
         return self.vad_device or "cpu"
-
-    @property
-    def max_chunk_samples(self) -> int:
-        return int(self.max_chunk_s * self.sample_rate)
 
     @property
     def min_silence_endpoint_samples(self) -> int:
